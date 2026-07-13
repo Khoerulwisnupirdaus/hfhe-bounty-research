@@ -1,0 +1,17 @@
+# Private research - do NOT commit
+/scratch/
+/notes/
+/private/
+*.py
+*.bin
+*.ct
+*.key
+*.secret
+*.attack
+*.log
+
+# System
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
