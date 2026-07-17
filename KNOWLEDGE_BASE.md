@@ -854,11 +854,129 @@ The official decoder also fails to compile (Edge.w type mismatch). Fixed version
 - `public_audit()` checks: wrapped, public_nonzero, zero_regression, H parity, sigma parity, H rank
 - plaintext read from `challenge_private/plaintext.txt` (not in repo)
 
-### 23.6 WHAT HAS NOT BEEN TRIED (TRULY NEW VECTORS)
-1. **Parse secret.ct with V3 deserializer** — extract real structure (c0, PC, layers with all fields)
-2. **Analyze PC (Pedersen Commitments)** — PC = R_inv * G + rho * H, are they in V2 data?
-3. **Multiple-instance LPN attack** — all 44 instances share SAME s, cross-instance correlation?
-4. **Lattice reduction on LPN** — embed LPN into lattice, use LLL/BKZ
-5. **Structured rows** — are LPN rows truly random or AES-CTR generated with exploitable structure?
-6. **The `public_audit` functions** — what exactly do `public_zero_regression()`, `mixed_H_parity()`, etc. check?
+### 23.6 COMPLETED ANALYSIS (Session 3 Deep-Dive)
+
+#### ✅ secret.ct PARSED — FULL STRUCTURE
+- **22 CTs**, each with 2 BASE layers, slots=1
+- **c0 = zeros** for all CTs (unused in BASE layers)
+- **R_com = ZERO** for all layers (removed in V2 as expected)
+- **PC values: NON-ZERO** for all 44 layers! Each is 32-byte Ristretto point
+- Edge counts: CT[0]=43, CT[21]=119, growing linearly (~2 noise edges/depth)
+
+#### ✅ H MATRIX ANALYSIS
+- Dimensions: 16384 columns × 8192 rows
+- Column weight: uniform 192-193
+- **GF2 rank = 8192 / 8192 = FULL RANK** → no LPN shortcut via kernel
+- H parity: mixed (even=8190, odd=8194) → no parity leak
+
+#### ✅ SIGNAL vs NOISE EDGES — CANNOT BE DISTINGUISHED
+- **K_signal = 8 FIXED** (hardcoded `static constexpr int K = 8`)
+- Signal coefs: 7 random Fp + 1 determined (last edge corrects to target)
+- Noise N2 edges: 2 per delta, coefs random
+- Noise N3 edges: 3 per delta, coefs random
+- **Signal w = coef * R, Noise w = delta * R** — both random magnitudes
+- Weight magnitude spread ~4-5 bits is natural variation, NOT signal/noise boundary
+- Verified with bounty2 sk.bin: ALL edges show as "noise" (no powg_B match) because coefs are random
+
+#### ✅ SERIALIZATION AUDIT — NO SECRET DATA LEAKED
+- `serialize_cipher()`: writes [slots, layers(rule+seed+PC), c0, edges(lid,idx,ch,w,sigma)]
+- `serialize_pubkey()`: writes [params, canon_tag, H[], ubk.perm[], ubk.inv[], H_digest, omega_B, powg_B[]]
+- R_com intentionally NOT serialized in V3 format (V2 fix)
+- **PC values ARE serialized** — 32 bytes per slot per layer
+- No extra/padding bytes, no sk data in pk.bin
+
+#### ✅ KEYGEN — CLEAN
+- `keygen()` uses `csprng_u64()` → `/dev/urandom` → cryptographically secure
+- `keygen_from_seed()` exists for wallet-based keygen but NOT used for bounty
+- pk contains only public data, sk separate
+
+#### ✅ DECRYPTION LOGIC — CORRECT
+- `dec_values()`: sum of (w * g^idx * R_inv * ±1) + c0 = plaintext
+- No obvious logic bug in decrypt flow
+
+#### ✅ PUBLIC_AUDIT FUNCTIONS — ANALYZED
+| Function | What it checks | Result |
+|----------|---------------|--------|
+| `bundle_is_wrapped()` | All CTs have 2 BASE layers | PASS |
+| `bundle_base_layers_are_public_nonzero()` | All T values non-zero | PASS |
+| `public_zero_regression()` | enc(0) has non-zero T (V2 fix works) | Regression test |
+| `mixed_H_parity()` | H columns have both even/odd parity | PASS |
+| `mixed_sigma_parity()` | Sigma values have mixed parity | PASS |
+| `small_H_rank_regression()` | H has full rank at small dimensions | Regression test |
+| `gf2_rank()` | GF2 Gaussian elimination | Full rank confirmed |
+
+### 23.7 DEEP TECHNICAL FINDINGS
+
+#### PC (Pedersen Commitment) Structure
+```
+PC = sc_from_fp_signed(R_inv) * G + rho * H
+```
+- `R_inv = fp_inv(R)` — 127-bit field element
+- `sc_from_fp_signed()`: maps Fp → Scalar, uses bit 62 of hi to determine sign
+- `rho = sc_reduce256(SHA256(PRF_RHO || prf_k[4] || nonce_lo || nonce_hi || slot_j))`
+- **rho depends on prf_k (256-bit), NOT lpn_s_bits** → recovering prf_k would break PC
+- Pedersen commitment is information-theoretically hiding if rho is random
+- **Cannot extract R_inv from PC without knowing rho**
+
+#### PRF_R Pipeline (Complete)
+```
+prf_R(pk, sk, seed) = prf_R_core(seed, R1) * prf_R_core(seed, R2) * prf_R_core(seed, R3)
+
+prf_R_core:
+  1. ybits = lpn_make_ybits(pk, sk, seed, dom)  ← LPN computation
+  2. toep_key = derive_aes_key(pk, sk, seed, TOEP)
+  3. toep_output = toep_127(AES-CTR(toep_key), ybits)  ← Toeplitz hash
+  4. R = hash_to_fp_nonzero(toep_output)
+```
+
+#### LPN Row Generation — COUPLED WITH NOISE!
+```cpp
+// SAME AES-CTR PRG generates BOTH row AND noise:
+prg.fill_u64(row_buf, s_words);      // row a_i from PRG
+int e = (prg.bounded(den) < num);     // noise e_i from SAME PRG continuation
+```
+- Rows and noise are NOT independent — they come from same AES-CTR stream
+- But AES-CTR is secure PRG → cannot predict noise from rows without key
+- AES key = SHA256(prf_k || canon_tag || H_digest || seed_params)
+
+#### Edge Index Distribution
+- 4 of 338 indices unused across all CTs
+- Max frequency: idx=242 (13 times), roughly uniform
+- No obvious clustering that would reveal signal edge positions
+
+#### enc_text Structure
+- CT[0] = enc_value(msg.size()) — encrypts LENGTH as uint64
+- CT[1..21] = enc_fp_wrapped_depth(block_i, depth_hint) — 15-byte blocks
+- depth_hint starts at 2, increments per block
+- **Plaintext length: 301-315 bytes** (21 data blocks × 15 bytes)
+
+#### Developer Comment Found
+- `// ndt - new fix (3 Jul 2026)` in encrypt.hpp line 979
+- This fix is IN the bounty commit (071b0e9) — not a pre-fix vulnerability
+
+### 23.8 DEAD ENDS CONFIRMED THIS SESSION
+1. ❌ H rank deficiency → full rank
+2. ❌ Signal/noise edge weight distinguisher → both random magnitudes
+3. ❌ PC value extraction → needs rho (from prf_k)
+4. ❌ Serialization data leak → clean
+5. ❌ Keygen weakness → uses /dev/urandom
+6. ❌ Decrypt logic bug → correct implementation
+7. ❌ c0 leak → always zero for BASE layers
+
+### 23.9 REMAINING UNEXPLORED VECTORS (PRIORITY)
+1. **GitHub Issue #499**: `hidden_coeff_stmt_digest` leaks secret coefficients — READ THIS ISSUE BODY
+2. **GitHub Issue #503**: `rist_decode` accepts non-canonical encodings — could allow PC forgery
+3. **GitHub Issue #501**: "R² leak in bounty2" — what is the R² leak mechanism?
+4. **LPN row/noise coupling**: rows and noise from same PRG — any known attack on coupled LPN?
+5. **Toeplitz hash invertibility**: if we know output (related to R via T), can we recover ybits?
+6. **Multiple-instance attack**: 44 LPN instances share same s, 3 prf_R_core calls per R with DIFFERENT domains → 132 total LPN evaluations on same s
+7. **rist_H() dead code**: messy implementation with overwritten variables — is H point computed correctly?
+8. **merge edge cancellation**: edges with w=0 but sigma≠0 are kept — any info leak?
+
+### 23.10 TOOLS BUILT THIS SESSION
+- `~/pvac_work/pvac_hfhe_cpp/v2_dump` — parses secret.ct, dumps full structure
+- `~/pvac_work/pvac_hfhe_cpp/v2_attack` — H rank, edge analysis, sigma parity
+- `~/pvac_work/pvac_hfhe_cpp/v2_weight` — weight magnitude and GCD analysis
+- `~/pvac_work/pvac_hfhe_cpp/verify_sig2` — signal/noise verification using bounty2 sk
+- `~/pvac_work/pvac_hfhe_cpp/verify_lpn` — LPN sample binding verifier (from repo)
 
