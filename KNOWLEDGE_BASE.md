@@ -980,3 +980,50 @@ int e = (prg.bounded(den) < num);     // noise e_i from SAME PRG continuation
 - `~/pvac_work/pvac_hfhe_cpp/verify_sig2` — signal/noise verification using bounty2 sk
 - `~/pvac_work/pvac_hfhe_cpp/verify_lpn` — LPN sample binding verifier (from repo)
 
+
+---
+
+## Session 4 — Final Exhaustive Audit (July 17-18, 2026)
+
+### 24. COMPLETE CODE AUDIT RESULTS
+
+Every security-critical file audited line-by-line:
+
+| File | Status |
+|------|--------|
+| field.hpp | Correct: fp_add, neg, mul, inv |
+| ristretto255.hpp | H independent from G, pedersen correct |
+| keygen.hpp | /dev/urandom, not from_seed() |
+| matrix.hpp | gen_H deterministic public, full rank |
+| lpn.hpp | prf_R_core, AES-CTR, Toeplitz correct |
+| encrypt.hpp | synth, SigEdge, N2Edge, merge, permute correct |
+| decrypt.hpp | Matches encrypt perfectly |
+| text.hpp | 15-byte packing clean |
+| hash.hpp | R NOT hashed in R_com (V2 fix confirmed) |
+| recrypt_src_core.hpp | ru_src not triggered for challenge |
+| pvac_artifact_serialize.hpp | No sk data leaked |
+| hfhe_bounty_artifact.cpp | generate/verify/public_audit clean |
+
+### 25. ALTERNATIVE DECRYPT METHODS TESTED
+
+- R=1 for all layers: Random output
+- R=omega_B: Random output
+- Native ztag match: ALL 44 layers = NO
+- PC with rho=0, R_inv=1..100: No match
+- Cancelled edges (w=0): None found
+
+### 26. STRUCTURAL CHECKS PASSED
+
+- 44 nonces unique, 44 ztags match, 44 PCs unique
+- H rank = 8192/8192 FULL, g^B = 1
+- All T values random, T0/T1 random, T0+T1 random
+- Cross-CT ratios all random
+
+### 27. FINAL STATUS: UNSOLVED
+
+30+ attack vectors explored, 3000+ lines of crypto code audited, no exploitable vulnerability found.
+
+See SECURITY_ASSESSMENT.md for complete technical writeup.
+
+### 28. TOOLS BUILT THIS SESSION
+- gen_test, full_audit, alt_decrypt, check_H, check_fp
