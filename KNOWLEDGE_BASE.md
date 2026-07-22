@@ -1669,3 +1669,79 @@ Total: 1829 edges across 44 layers
 - CT[1..21]: v = 15-byte ASCII chunk, max ~120 bits
 - All printable ASCII: bytes in [0x20, 0x7E]
 
+### 82. 🔥 VERIFY_LPN_SAMPLE_BINDING.CPP — DEEP ANALYSIS
+
+**Source**: `hfhe-challenge/source/tools/verify_lpn_sample_binding.cpp`
+
+**What it does**: Verifies that LPN samples are BOUND to specific layers of secret.ct by matching:
+- `seed_ztag` = layer.seed.ztag
+- `nonce_lo_hex` = layer.seed.nonce.lo
+- `nonce_hi_hex` = layer.seed.nonce.hi
+- `public_T_hex` = Σ(±w × g^idx) for that layer = T value
+
+**Key function `public_layer_aggregate`**: Computes T = Σ(±w[slot] × powg_B[idx]) for a given layer.
+This is the SAME T that we proved equals R × v.
+
+**LPN sample structure**:
+```
+44 files (22 CTs × 2 layers), ALL domain "pvac.prf.r.1" (R1 only)
+16384 samples per file = 720,896 total
+Each sample: {i: index, y: 0/1, a: hex(4096 bits)}
+y = <a, s> XOR e, where e ~ Bernoulli(1/8)
+ALL 44 files use the SAME secret s (confirmed)
+```
+
+**CONFIRMED BINDING**: LPN sample metadata (ztag, nonce) matches CT layer seeds exactly.
+CT[0] L0 ztag = 0x5934e19cfa03c47a matches sample seed_ztag = 6428010632490239098.
+
+### 83. PRF_R_CORE PIPELINE (FULLY MAPPED)
+
+```
+prf_R_core(pk, sk, seed, dom):
+  1. ybits = lpn_make_ybits(pk, sk, seed, dom)
+     → A matrices from PRG(seed + dom), y = As + e
+     → LPN samples give us (A_i, y_i) for dom="pvac.prf.r.1"
+  
+  2. toep_key = derive_aes_key(pk, sk, seed, Dom::TOEP)
+     → Uses prf_k (UNKNOWN, 256-bit)
+     → toep_nonce ^= fnv1a_domain(dom)
+  
+  3. top = AES-CTR(toep_key, toep_nonce)
+     → Generates Toeplitz matrix row
+  
+  4. result = hash_to_fp(toeplitz_127(top, ybits))
+     → 127-bit output
+
+R = R1 × R2 × R3 (three independent evaluations with different domains)
+```
+
+**What s recovery gives us**:
+- Can compute ybits for ALL domains (r.1, r.2, r.3) for ALL 44 layers
+- Because ybits = As + e, and A is derived from seed+dom (public), only s is secret
+- BUT still need toep_key (from prf_k) to compute R
+
+**What we DON'T have**:
+- prf_k (256-bit, generates Toeplitz matrix)
+- LPN samples for R2 ("pvac.prf.r.2") and R3 ("pvac.prf.r.3")
+
+### 84. DEV HINT RE-ANALYSIS (UPDATED)
+
+Dev hint (from image): 
+> "Pemulihan S merupakan target kriptanalisis tambahan; syarat utama hadiahnya
+> tetaplah pemulihan teks biasa/muatan dompet dari secret.ct"
+
+Translation: "S recovery is additional cryptanalysis target; main prize requirement
+is plaintext/wallet payload recovery from secret.ct"
+
+**This means**:
+1. There IS a way to recover plaintext WITHOUT solving LPN for s
+2. s recovery is a BONUS target, not the main attack path
+3. The main vulnerability is in the HFHE structure itself
+4. verify_lpn_sample_binding.cpp was added as a tool — dev wants us to USE it
+
+**Questions this raises**:
+- If not through s, how can we recover plaintext?
+- Does the binding between LPN samples and CTs create an exploitable relationship?
+- Is public_T_hex = T = R × v the key leverage point?
+- Can we use the fact that ALL 44 LPN sample sets share the SAME s?
+
