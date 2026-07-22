@@ -1027,3 +1027,645 @@ See SECURITY_ASSESSMENT.md for complete technical writeup.
 
 ### 28. TOOLS BUILT THIS SESSION
 - gen_test, full_audit, alt_decrypt, check_H, check_fp
+
+---
+
+## Session 5 — LPN FOCUSED ATTACK (July 18, 2026)
+
+> **FULL DETAILS: See LPN_ATTACK_LOG.md for complete findings (entries 29-44)**
+
+### CRITICAL CONCLUSIONS FROM SESSION 5
+
+1. **CANNOT DECRYPT WITHOUT SOLVING LPN** — No shortcut exists. Must recover s (4096 bits) AND prf_k (256 bits) to compute R values for decryption.
+
+2. **RECOVERING s ALONE IS NOT SUFFICIENT** — Even with s, we cannot recover prf_k (needed for AES key derivation, Toeplitz matrix). SHA256 and AES are one-way.
+
+3. **LPN(4096, 1/8) IS COMPUTATIONALLY INFEASIBLE BY ALL KNOWN ALGORITHMS**:
+   - BKW: 2^341
+   - Pooled Gauss: 2^789
+   - Statistical Decoding: 2^549
+   - All hybrid approaches: > 2^300
+
+4. **NO IMPLEMENTATION BUGS FOUND IN LPN**:
+   - bounded() noise generation: correct rejection sampling
+   - Rows genuinely random (AES-CTR working correctly)
+   - Cross-file stats normal, no anomalies
+   - Secret s is uniform random (HW ~2048), NOT sparse
+
+5. **THE PARADOX REMAINS**: Dev says LPN is breakable ("happy breaking!") but all academic estimates say 2^341+. Something SPECIFIC about this instance must be weaker than generic LPN.
+
+### ALL ANGLES EXHAUSTED — NO RESULTS
+1. ~~GitHub Issues #499, #501, #503~~ — CHECKED, no exploitable path
+2. ~~Toeplitz hash properties~~ — CHECKED, cannot reverse without prf_k
+3. ~~Multi-domain relationship~~ — CHECKED, R1*R2*R3 doesn't help
+4. ~~Neural network LPN solvers~~ — Max n~512 in literature, n=4096 infeasible
+5. ~~Row/noise coupling from same PRG~~ — AES-CTR secure, no exploit
+6. ~~Bounty3~~ — CHECKED, same crypto, no easier path found
+
+### ABSOLUTE STATUS: ALL KNOWN ATTACK VECTORS EXHAUSTED (for bounty challenge)
+- 30+ attack vectors tried on HFHE structure
+- 6+ LPN-specific attack approaches analyzed
+- All complexity estimates > 2^300
+- No implementation bugs found
+- No mathematical shortcuts found
+- **The bounty challenge remains UNSOLVED as of July 18, 2026**
+
+---
+
+## Session 6 — WebCLI AUDIT & keygen_from_seed DISCOVERY (July 18, 2026)
+
+### 45. CRITICAL DISCOVERY: keygen_from_seed() LINKS prf_k AND lpn_s
+**File**: webcli/pvac/include/pvac/crypto/keygen.hpp (line 172+)
+
+In production (webcli), `keygen_from_seed(wallet_privkey)` derives BOTH prf_k AND lpn_s_bits from the SAME AES-CTR stream:
+
+```
+master = SHA256("OCTRA_PVAC_MASTER_V1" || wallet_privkey)
+sk_seed = SHA256("OCTRA_PVAC_SK" || master)
+rng = AesCtr256(sk_seed, nonce=0)
+prf_k[0..3] = rng.u64() × 4    // bytes 0-31 of AES-CTR stream
+lpn_s_bits[0..63] = rng.u64() × 64  // bytes 32-543 of AES-CTR stream
+```
+
+**IMPLICATION**: If you recover lpn_s_bits from a real user's on-chain encrypted data, you know bytes 32-543 of the AES-CTR keystream. Since AES-CTR is keystream = AES(key, counter), knowing ANY part of the keystream output does NOT reveal the key (AES is secure). BUT: the keystream at counter 0-3 (bytes 0-31) = prf_k. So you'd need to know sk_seed to compute counter 0-3.
+
+**HOWEVER**: Knowing s bits 32-543 = knowing AES-CTR output at those counters. AES-CTR is a PRF. Without the key (sk_seed), you cannot compute output at different counters.
+
+### 46. BOUNTY CHALLENGE USES keygen() NOT keygen_from_seed()
+- Tests: `tests/bounty_test.cpp:309: keygen(prm, pk, sk);`
+- This means prf_k and lpn_s_bits are INDEPENDENTLY random (from /dev/urandom)
+- The keygen_from_seed coupling does NOT apply to the bounty challenge
+- **Recovering s from the bounty STILL does NOT give prf_k**
+
+### 47. POSSIBLE "FUNDAMENTALLY BROKEN" MEANING
+Dev said system is "fundamentally broken" but "didn't connect to HFHE":
+- The break may be: keygen_from_seed creates a DETERMINISTIC relationship
+- In real network usage, if LPN is ever solvable (even theoretically), BOTH prf_k and s are compromised
+- This is a DESIGN flaw in how keys are derived (same stream), not a crypto break
+- For the bounty challenge specifically, this doesn't help (independent keys)
+
+### 48. WebCLI REPO STRUCTURE (github.com/octra-labs/webcli)
+Key files audited:
+- `crypto_utils.hpp` — Custom SHA256, base64 (standard implementations)
+- `wallet.hpp` — Wallet stored in data/wallet.oct, ed25519 keys
+- `lib/pvac_bridge.hpp` — Uses keygen_from_seed() for real wallets
+- `pvac/pvac_c_api.cpp` — C API bridge, enc/dec/mul operations
+- `pvac/include/pvac/crypto/keygen.hpp` — Both keygen() and keygen_from_seed()
+- `pvac/include/pvac/core/seedable_rng.hpp` — SeedableRng = AesCtr256
+
+### 49. SeedableRng = AesCtr256
+```cpp
+struct SeedableRng {
+    AesCtr256 prg;
+    void init(const uint8_t seed[32]) { prg.init(seed, 0); }
+    uint64_t u64() { return prg.next_u64(); }
+};
+```
+Same AES-CTR used for LPN row generation AND key derivation.
+AES-CTR is secure: knowing output at positions X does NOT reveal output at positions Y.
+
+### 50. FULL WebCLI AUDIT — NO EXPLOITABLE VULNERABILITIES FOUND
+**Files audited (July 18, 2026)**:
+
+| File | Finding |
+|------|---------|
+| `crypto_utils.hpp` | Standard SHA256 + base64. Clean. |
+| `wallet.hpp` | Wallet in data/wallet.oct, PIN-encrypted. ed25519 keys. Clean. |
+| `lib/pvac_bridge.hpp` | init() takes first 32 bytes of wallet sk as PVAC seed. Confirmed keygen_from_seed. |
+| `lib/stealth.hpp` | ECDH + AES-256-GCM. Standard crypto. Clean. |
+| `lib/circle_hfhe_receipt.hpp` | Circle HFHE receipts with ed25519 sigs. Clean. |
+| `pvac/pvac_c_api.cpp` | C bridge to PVAC. pvac_aes_kat is deterministic test. Clean. |
+| `main.cpp` (294KB) | Local web server. 40+ API endpoints audited. |
+
+**API Endpoints checked**:
+- `/api/keys/private` — requires PIN + confirmation text. Local only. Not remotely exploitable.
+- `/api/key_switch` — sends new PVAC pubkey on-chain. Standard.
+- `/api/fhe/decrypt` — local decrypt using local sk. Clean.
+- `/api/encrypt` / `/api/decrypt` — uses random_bytes(seed, 32) for each operation. Clean.
+- `/api/circle/fhe/decrypt` — has authorization + proof requirements. Clean.
+
+**Encryption logic**: `synth_seeded()` in webcli is IDENTICAL to pvac_hfhe_cpp. No diff.
+
+### 51. keygen_from_seed() IS A DESIGN CONCERN BUT NOT A BOUNTY VULNERABILITY
+- In production: wallet_privkey[0:32] → SHA256("OCTRA_PVAC_MASTER_V1" || ...) → master
+- From master: prf_k and lpn_s come from same AES-CTR stream
+- This means: if ANYONE finds a way to solve LPN for ANY user on the real network, they get BOTH prf_k and s
+- **BUT**: This doesn't apply to the bounty challenge (uses random keygen)
+- **AND**: AES-CTR is secure — knowing later stream positions doesn't reveal earlier positions
+
+### 52. WALLET ARCHITECTURE
+```
+Wallet private key (ed25519 sk, 64 bytes)
+  ├── First 32 bytes → PVAC seed
+  │   ├── SHA256("OCTRA_PVAC_MASTER_V1" || seed) → master
+  │   │   ├── SHA256("OCTRA_PVAC_TAG" || master) → canon_tag (8 bytes)
+  │   │   ├── SHA256("OCTRA_PVAC_SK" || master) → sk_seed (32 bytes)
+  │   │   │   └── AesCtr256(sk_seed, 0) → [prf_k(32B), lpn_s(512B)]
+  │   │   └── SHA256("OCTRA_PVAC_GEN" || master) → gen_seed → g, omega_B
+  │   └── PubKey: canon_tag, H_digest, ubk, powg_B, omega_B
+  └── Full 64 bytes → ed25519 signing
+```
+
+---
+
+## Session 7 — COMPETITOR CONFIRMATION & CHALLENGE STATUS (July 21, 2026)
+
+### 53. SMOKE-UI INDEPENDENTLY CONFIRMS ALL OUR FINDINGS — ALSO FAILED
+**Source**: Twitter @smoke-ui, Day 6 update (July 2026)
+
+Their results (6 days formal audit):
+- **480 samples, 6 keys, 1104 features** → 0 invariants survive FDR
+- **Ciphertext algebra (toy)** → 0.000000 TVD between distinct plaintexts
+- **LPN-PRF margin** → no low-dim simplification helps at n=4096, τ=1/8
+- **"The wrapper doesn't leak. No equality oracle from algebra."**
+- **Day 7 = FREEZE** (they are stopping)
+
+Full assessment: https://github.com/smoke-ui/octra-hfhe-v2-security-assessment
+
+### 54. CROSS-VALIDATION: OUR FINDINGS vs SMOKE-UI
+| Area | Our Finding | Smoke-UI Finding |
+|------|-------------|------------------|
+| LPN hardness | 2^341+ (all estimators) | "no low-dim simplification" |
+| Statistical bias | None (44 files, 720K samples) | 0 survive FDR (480 samples) |
+| Wrapper leak | V2 wrapping prevents zero-detection | "wrapper doesn't leak" |
+| Algebraic distinguisher | No distinguisher found | 0.000000 TVD |
+| Equality oracle | enc(0) has random T values | "no equality oracle" |
+
+**Two independent teams, same conclusion: HFHE V2 appears cryptographically sound.**
+
+### 55. FINAL STATUS (July 21, 2026)
+
+**CHALLENGE: UNSOLVED** by anyone.
+
+- 52+ findings documented across 7 sessions
+- 50+ attack vectors attempted, all failed
+- Full WebCLI audit completed, no exploitable vulnerabilities
+- keygen_from_seed design concern identified (not applicable to bounty)
+- Competitor (smoke-ui) independently confirmed all negative results
+- Dev claim "fundamentally broken" remains unsubstantiated for HFHE specifically
+- Dev clarification: break "didn't connect to HFHE" — may refer to a different layer
+
+**To resume**: If new hints emerge, read this KNOWLEDGE_BASE.md first. Do NOT repeat any approach listed above.
+
+---
+
+## SESSION 8 (July 21, 2026) — EQUATION SYSTEM BREAKTHROUGH
+
+### 56. EXACT DECRYPTION FORMULA (VERIFIED ✓)
+
+Using bounty2 (known sk.bin), we VERIFIED the exact mathematical equation:
+
+```
+plaintext = c0 + Σ_l ( S_l / R_l )
+```
+
+Where:
+- **S_l = Σ_{e ∈ layer_l} sgn(e.ch) × e.w × powg_B[e.idx]** — FULLY PUBLIC, computable from ciphertext + pk
+- **R_l = prf_R(pk, sk, seed_l)** — SECRET, requires prf_k + lpn_s
+- **R = R1 × R2 × R3** (product of 3 independent prf_R_core calls with different domains)
+- Each R_core = hash_to_fp_nonzero(toeplitz_127(toep_matrix, ybits))
+- ybits = LPN(A, s, e) output
+
+**Code path**: decrypt.hpp lines 73-95 (dec_values function)
+
+### 57. BOUNTY2 SERIALIZATION FORMAT (DIFFERENT FROM WEBCLI!)
+
+bounty_test.cpp uses COMPLETELY different serialization from pvac_serialize.hpp:
+- Layer: `rule(u8) + ztag(u64) + nonce_lo(u64) + nonce_hi(u64)` — NO R_com, NO PC!
+- Edge: `layer_id(u32) + idx(u16) + ch(u8) + pad(u8) + w(single Fp) + sigma(BitVec)`
+- Cipher: `nL(u32) + nE(u32) + layers[] + edges[]` — NO slots field, NO c0!
+- CT file: `Magic(u32=0x66699666) + Ver(u32=1) + count(u64) + ciphers[]`
+- PK: params → canon_tag → H_digest(32B) → H(u64 count + BitVec[]) → ubk_perm → ubk_inv → omega_B → powg_B
+
+### 58. BOUNTY2 EQUATION SYSTEM RESULTS
+
+| Cipher | Layers | BASE | PROD | Edges | Edges/Layer | Independent R unknowns |
+|--------|--------|------|------|-------|-------------|----------------------|
+| a[0]   | 2      | 2    | 0    | 40    | 20          | 2                    |
+| b[0]   | 2      | 2    | 0    | 40    | 20          | 2                    |
+| sum[0] | 4      | 4    | 0    | 80    | 20          | 4                    |
+
+KEY INSIGHT: sum.ct REUSES the exact same R values from a.ct and b.ct!
+- sum.L0 has same R as a.L0, sum.L1 has same R as a.L1
+- sum.L2 has same R as b.L0, sum.L3 has same R as b.L1
+
+### 59. SECRET.CT TEXT ENCODING
+
+From text.hpp, secret.ct contains TEXT encrypted as:
+```
+CT[0] = enc_value(msg.size())           → encrypted message length
+CT[1..N] = enc_fp_wrapped_depth(15-byte chunks of text) → encrypted text blocks
+```
+
+secret.ct bounty header: "OCTRA-HFHE-BTY02"(16B) + num_cts(u64=22) + length-prefixed ciphers
+- 22 ciphertexts → CT[0]=length, CT[1..21]=text blocks → max 315 bytes of text
+- Each text block = 15 bytes packed into Fp via pack_15_bytes_to_fp()
+- Decryption: dec_text() → unpack each Fp to 15 bytes, concatenate, trim to length
+
+### 60. SECRET.CT FORMAT (PVAC V3)
+
+```
+"OCTRA-HFHE-BTY02" (16 bytes ASCII)
+num_ciphertexts (u64) = 22
+For each cipher:
+  ct_byte_length (u64)
+  PVAC v3 serialized cipher:
+    "PVAC"(4B) + ver(u8=3) + tag(u8=0)
+    slots(u64=1)
+    nLayers(u64) + Layer[]:
+      rule(u8) + seed(3×u64)/parents(2×u32) + R_com(32B) + nPC(u64) + PC[](32B each)
+    nC0(u64) + c0[](Fp)
+    nEdges(u64) + Edge[]:
+      layer_id(u32) + idx(u16) + ch(u8) + nW(u64) + w[](Fp) + sigma(BitVec)
+```
+
+### 61. FORMULA-VS-FORMULA ATTACK STRATEGY
+
+The equation `plain = c0 + Σ(S_l/R_l)` has:
+- S_l values: PUBLIC (known)
+- R_l values: SECRET (unknown)
+- 1 equation per ciphertext, L unknowns per ciphertext
+
+**Attack vectors from equation structure:**
+1. If only 1 BASE layer: R is directly solvable IF plaintext is guessed
+2. PROD layers: R_prod = R_a × R_b reduces independent unknowns
+3. Cross-cipher constraints: if different ciphertexts share BASE layer seeds → shared R
+4. GF(2) vs GF(p) mixing: R computed in GF(2) via LPN, used in GF(p) for division
+5. Multi-edge per layer: 20 edges → 1 constraint, but only 1 unknown (R) per layer
+
+**CRITICAL OPEN QUESTION**: Does the main challenge (secret.ct) have layers with shared seeds across ciphertexts? If YES → system of equations may be over-determined → solvable!
+
+### 62. PARSER STATUS — FULLY WORKING!
+
+- bounty2: FULLY PARSEABLE AND VERIFIED (eq_final.cpp)
+- secret.ct: **FULLY PARSED** (full_parse_v2.py) — ALL 22 ciphertexts!
+- **V3 format key difference: NO R_com field!** (dropped in version 3)
+- ct_len in bundle = data bytes (PVAC header 6B is EXTRA)
+- bitvec in v3: nbits(u64) + nwords(u64) + data[] (extra nwords field vs bounty_test)
+
+### 63. SECRET.CT FULL STRUCTURE
+
+| CT | Layers | BASE | PROD | Edges | c0 | Edges/L0 | Edges/L1 |
+|----|--------|------|------|-------|----|----------|----------|
+| 0  | 2      | 2    | 0    | 43    | 0  | 22       | 21       |
+| 1  | 2      | 2    | 0    | 47    | 0  | 24       | 23       |
+| 2  | 2      | 2    | 0    | 54    | 0  | 27       | 27       |
+| ... | 2     | 2    | 0    | ...   | 0  | ...      | ...      |
+| 21 | 2      | 2    | 0    | 119   | 0  | 61       | 58       |
+
+KEY FACTS:
+- ALL 22 ciphertexts have exactly 2 BASE layers, 0 PROD
+- ALL c0 = 0
+- NO seeds shared across ciphertexts (44 unique seeds)
+- Edge count GROWS with cipher index (43→119), consistent with depth_hint increment in enc_text()
+- Edges ~evenly split between L0 and L1
+
+### 64. EQUATION SYSTEM STATUS
+
+System: 22 equations, 44 unknowns → UNDERDETERMINED (factor 2)
+
+Each equation: `plain_i = S_i0 / R_i0 + S_i1 / R_i1`
+
+ADDITIONAL CONSTRAINTS NOT YET EXPLOITED:
+1. **CT[0] plaintext is a SMALL INTEGER** (message length ≤ 315)
+2. **CT[1..21] plaintexts are 15-byte ASCII text** packed into Fp
+3. Each R is computed from SAME prf_k + s → all 44 R values determined by ~4352 bits (prf_k=256 + s=4096)
+4. R = R1 × R2 × R3 (product of 3 LPN-derived values) — potential algebraic constraint
+
+### NEXT STEPS (Session 9):
+1. Exploit CT[0] small-value constraint: if length is guessable (≤315), try each value
+2. For each length guess: `length = S_00/R_00 + S_01/R_01` → 1 equation, 2 unknowns
+3. ASCII constraint: CT[1..21] should decode to printable ASCII → R values must yield bytes 0x20-0x7E
+4. Try plaintext guessing: "send X OCT to..." or "mnemonic: word1 word2..."
+5. Cross-CT algebraic relationships from shared prf_k + s
+
+### 65. LPN SAMPLE FILES DISCOVERED (BIGGEST BREAKTHROUGH!)
+
+Dev added `lpn_samples/` directory to hfhe-challenge with **44 JSONL files**!
+File naming: `ct{XX}_l{Y}_s0_pvac_prf_r_1.jsonl` (one per BASE layer)
+
+Each file:
+- Line 0: Header with metadata (format, n, t, tau, seed info, public_T_hex)
+- Lines 1-16384: LPN samples with fields:
+  - `i`: sample index (0..16383)
+  - `y`: **THE LPN OUTPUT BIT** (0 or 1)
+  - `a`: **THE MATRIX ROW** as hex string (4096 bits = 512 bytes)
+
+LPN Parameters:
+- format: "octra-bounty-target-seed-lpn-ay-v1"
+- dom: "pvac.prf.r.1" (R1 domain of prf_R_core)
+- n=4096, t=16384, tau=1/8
+- 44 files × 16384 samples = **720,896 total LPN samples**
+- **ALL share the SAME secret s** (4096-bit LPN secret)
+
+DEV HINT: "Pemulihan S merupakan target kriptanalisis tambahan"
+(Recovery of S is an additional cryptanalysis target)
+
+Also found: `verify_lpn_sample_binding.cpp` — tool to verify that LPN samples
+match ciphertext metadata (seed, nonce, public_T = our S_l values)
+
+### 66. ATTACK PATH: LPN → s → R → DECRYPT
+
+If we recover LPN secret `s`:
+1. s + prf_k → compute prf_R for any seed → all 44 R values
+2. With all R values: `plain_i = c0_i + S_i0/R_i0 + S_i1/R_i1` → decrypt all 22 CTs
+3. dec_text() → recover wallet/mnemonic
+
+BUT: LPN with n=4096, tau=1/8 has estimated complexity 2^341 (from Code_estimators)
+HOWEVER: Dev is GIVING us the samples — maybe the parameters or structure are weak?
+
+**NOTE on V3 format correction**: V3 cipher layers have NO R_com (32B) field.
+The layer format is: rule(u8) + seed(3×u64) + nPC(u64) + PC[](32B×nPC)
+
+### REAL NEXT STEPS:
+1. **Run LPN complexity estimator** with exact params (n=4096, tau=1/8, t=720896)
+2. **Check if multiple LPN instances (44 files, same s) help** — multi-instance LPN
+3. **Try BKW/Gaussian elimination** with noise filtering
+4. **Investigate if prf_k can be bypassed** — samples are for domain "pvac.prf.r.1" only
+5. **Check if there's a pattern in y bits** that reveals structure
+
+---
+
+## SESSION 9 (July 22, 2026) — LPN SOLVING ATTEMPTS & KEYGEN ANALYSIS
+
+### 67. LPN SOLVING — ALL STANDARD METHODS FAILED
+
+Attempted:
+| Method | Result | Details |
+|--------|--------|---------|
+| GF(2) Gaussian elimination (random subsets) | ~50% match (random) | 20 trials, all give random s |
+| Iterative GE + error correction | ~50% match | 50 trials, filtering doesn't help |
+| Sparse secret (HW=1 test) | ~50.98% best | s is NOT sparse, full-weight like bounty2 |
+| BKW feasibility | INFEASIBLE | Noise doubles per round: tau=0.125→0.219→0.342→0.450→0.495 |
+
+**CONCLUSION**: Standard LPN with n=4096, tau=1/8 is computationally infeasible.
+All known attacks require 2^300+ operations. BKW can't reduce more than ~40 bits 
+before noise overwhelms signal.
+
+### 68. KEYGEN ANALYSIS
+
+Two keygen modes exist:
+1. `keygen()` — random (USED BY BOUNTY ARTIFACT per line 350 of hfhe_bounty_artifact.cpp)
+2. `keygen_from_seed(wallet_privkey)` — deterministic from 32B wallet private key
+
+`keygen_from_seed` chain:
+```
+wallet_privkey(32B) → SHA256("OCTRA_PVAC_MASTER_V1" + privkey) → master
+  → SHA256("OCTRA_PVAC_TAG" + master) → canon_tag (in pk.bin, PUBLIC)
+  → SHA256("OCTRA_PVAC_SK" + master) → SeedableRng → prf_k(256b) + lpn_s(4096b)
+```
+
+But bounty artifact uses `keygen()` (independent random prf_k and s), NOT keygen_from_seed.
+So prf_k and s are INDEPENDENT. Recovering s does NOT help recover prf_k.
+
+### 69. WHY s RECOVERY ALONE IS INSUFFICIENT
+
+Even if we recovered s from LPN samples:
+- We know y = As + e → we know ybits (already given in JSONL!)
+- But R1 = hash(toep_127(T, ybits)) where T = toeplitz matrix
+- T is derived from prf_k (256-bit, independent of s)
+- R2, R3 need ybits for different domains (also need prf_k to generate A matrices)
+- So BOTH s AND prf_k needed for decryption
+- Total secret: 4352 bits (256 + 4096)
+
+### 70. DEV HINT RE-ANALYSIS
+
+Dev said: "Recovering S is an ADDITIONAL cryptanalysis target"
+→ s recovery is SECONDARY, not the main attack
+→ The main attack is "recovery of plaintext/wallet payload from secret.ct"
+→ There must be a way to recover plaintext WITHOUT solving LPN
+
+### 71. WHAT WE KNOW AND DON'T KNOW
+
+KNOWN (PUBLIC):
+- pk.bin: H matrix, powg_B[337], canon_tag, H_digest
+- secret.ct: 22 ciphertexts, all parsed, S_l values computable
+- LPN samples: 720,896 (A_i, y_i) pairs, ybits for domain "pvac.prf.r.1"
+- Plaintext structure: CT[0]=length, CT[1..21]=15-byte ASCII chunks
+
+UNKNOWN (SECRET):
+- prf_k: 256 bits (independent random)
+- lpn_s_bits: 4096 bits (LPN secret, full weight ~2048)
+- R values: 44 Fp values (each derived from prf_k + s + seed)
+- Plaintext: the wallet private key + metadata
+
+### NEXT APPROACH TO TRY:
+Focus on the HFHE structure itself (not LPN):
+1. Re-examine if homomorphic operations (ct_mul, ct_square) leak info  
+2. Check if the edge structure reveals R through algebraic relations
+3. Study if delta noise values are predictable from public data
+4. Look for bugs in the commitment/binding verification
+5. Try to exploit the text encoding structure (15-byte blocks)
+
+---
+
+## SESSION 9 CONTINUED (July 22-23, 2026) — BOUNTY2 TRAINING GROUND
+
+### 72. BOUNTY2 FILE FORMAT (NATIVE, NOT PVAC)
+
+bounty2 uses its OWN serialization from `tests/bounty2_test.cpp`, NOT `pvac_artifact_serialize.hpp`.
+
+```
+Magic constants: CT=0x66699666, PK=0x06660666, SK=0x66666999, VER=1
+
+SK format: magic(u32) + ver(u32) + prf_k[0..3](4×u64) + lpn_count(u64) + lpn_s_bits[](n×u64)
+CT format: magic(u32) + ver(u32) + n_cts(u64) + [per ct: nL(u32) + nE(u32) + layers + edges]
+PK format: magic(u32) + ver(u32) + m_bits(u32) + B(u32) + lpn_t(u32) + lpn_n(u32) + 
+           lpn_tau_num(u32) + lpn_tau_den(u32) + noise_entropy_bits(u32) + depth_slope_bits(u32) +
+           tuple2_fraction(f64 as u64) + edge_budget(u32) + canon_tag(u64) + H_digest(32B) +
+           H_count(u64) + H[](bitvecs) + perm_count(u64) + perm[](i32s) + inv_count(u64) + 
+           inv[](i32s) + omega_B(Fp) + powg_count(u64) + powg_B[](Fps)
+Layer BASE: rule(u8=0) + ztag(u64) + nonce_lo(u64) + nonce_hi(u64)
+Layer PROD: rule(u8=1) + pa(u32) + pb(u32)
+Edge: layer_id(u32) + idx(u16) + ch(u8) + pad(u8) + w(Fp) + sigma(BitVec)
+  NOTE: Edge.w is SINGLE Fp in bounty2 format (putFp(o, e.w)), but current struct has vector<Fp>
+BitVec: nbits(u32) + words[ceil(nbits/64)](u64 each)
+Fp: lo(u64) + hi(u64)
+```
+
+hfhe-challenge/secret.ct uses DIFFERENT format: `OCTRA-HFHE-BTY02` (16-byte magic).
+Main challenge ciphertext parsed differently from bounty2.
+
+### 73. BOUNTY2 DECRYPT RESULTS (b2_full.cpp)
+
+Successfully compiled and ran full decryption pipeline with known sk.bin:
+```
+pk: B=337, m_bits=8192, lpn_n=4096, canon_tag=0xe40f940644be5578
+sk: prf_k=[0x0e7cedbf86286e2e, 0xf8adb2a16b2d1e28, 0xdad108b1c99cc831, 0x1d69d98715ec5c29]
+sk: lpn_s HW=2051/4096
+
+a.ct: 2 layers, 40 edges (20 per layer)
+Layer 0: R = 0x00818f19329b59cac130c61be668d523
+         R1*R2*R3 = R ✓
+Layer 1: R = 0x3f3534dcb6b2dba77733334b9bd954bf
+```
+
+🔥 **CRITICAL FINDING: DELTA IS EXACTLY ZERO**
+```
+Manual Σ(T/R) + c0 = dec_value EXACTLY
+diff (dec - manual) = 0x0000...0000
+```
+This means: `dec_values()` = `c0 + Σ(±w*g^idx / R)` with NO noise correction needed!
+Either delta is zero for depth-0 CTs, or delta is incorporated into the edge weights.
+
+**BUT**: dec_value(a) = 674892774807482974, NOT 1 as expected from source (a=1, b=2).
+Possible causes:
+1. sk.bin may not match published pk/ct (sk.bin not listed in README checksums)
+2. Edge.w format mismatch (single Fp vs vector<Fp>) causing parsing issues  
+3. Code has changed since artifacts were generated ("ndt - new fix 3 Jul 2026")
+
+### 74. KEY STRUCTURAL FINDINGS
+
+**Decryption equation (VERIFIED):**
+```
+plaintext = c0 + Σ_layers Σ_edges (±w × g^idx) / R_layer
+         = c0 + Σ_layers T_layer / R_layer
+where T_layer = Σ_edges_in_layer (±w × g^idx)  [PUBLIC, computable]
+```
+
+**No delta noise**: At least for depth-0, the decryption is EXACT.
+This is important because it means: for the main challenge,
+`plaintext_i = Σ(T_i_l / R_i_l)` EXACTLY (since c0 is empty/zero).
+
+**Edge weight structure**: Each edge w = coef × R_layer.
+Within a layer, all edge weights share the SAME R factor.
+So w_i / w_j = coef_i / coef_j (R cancels).
+But coefficients are random (7 of 8) + 1 forced. Not helpful directly.
+
+### 75. APPROACHES CONFIRMED DEAD (DO NOT REPEAT)
+
+| # | Approach | Why Dead |
+|---|----------|----------|
+| 1 | Solve LPN for s (GE/BKW/ISD) | n=4096, tau=1/8 → 2^300+ ops |
+| 2 | Sparse secret | s is full-weight HW≈2048 |
+| 3 | Iterative GE + error correction | Always converges to 50% |
+| 4 | Recover prf_k from s | Independent random (keygen() used) |
+| 5 | Use keygen_from_seed chain | Bounty uses keygen(), not keygen_from_seed |
+| 6 | ybits → R without prf_k | Toeplitz is universal hash, ybits alone useless |
+| 7 | All approaches in KB sections 11, 12, 15 | See those sections |
+
+### 76. WHAT HASN'T BEEN TRIED YET
+
+🔴 HIGH PRIORITY (HFHE-connected):
+1. **Verify delta=0 holds for the MAIN CHALLENGE** (depth 0-22 CTs)
+2. **Use bounty2 with CORRECT sk to fully verify pipeline** — need to regenerate 
+   bounty2 artifacts from bounty2_test.cpp to get matching sk
+3. **Analyze synth() noise generation** — understand exactly when delta≠0
+4. **Check enc_text vs enc_value** — main challenge uses enc_text which packs 15-byte chunks
+
+🟡 MEDIUM PRIORITY (algebraic):
+5. **GCD/factorization of T values** — T = R × va, if va has special structure for ASCII text
+6. **Cross-CT analysis** — 22 CTs encrypt related data (chunks of same wallet key)
+7. **Analyze prf_R_core internals for bias** — maybe the LPN → Toeplitz → hash pipeline 
+   has statistical bias that accumulates over 44 layers
+
+🟢 TOOLS BUILT:
+- `b2_full.cpp` — Bounty2 decrypt with R analysis (WORKING, uses native format)
+- `lpn_sparse.cpp` — Sparse secret test (confirmed full-weight)
+- `lpn_solve2.cpp` — Iterative GE (confirmed ~50%)
+
+### 77. FILE LOCATIONS
+- b2_full.cpp: `scratch/b2_full.cpp` → builds at `~/pvac_work/pvac_hfhe_cpp/build/b2_full`
+- bounty2 data: `~/pvac_work/pvac_hfhe_cpp/bounty2_data/`
+- Main challenge: `~/pvac_work/pvac_hfhe_cpp/hfhe-challenge/`
+
+### 78. 🔥 CRITICAL MATH BREAKTHROUGH: T = R × v EXACTLY (NO NOISE)
+
+**VERIFIED**: Regenerated bounty2 with matching sk → dec_value(a) = 1 ✓
+
+**PROOF that T/R = v (exact, no noise)**:
+
+In `synth()` (encrypt.hpp):
+```
+1. delta.agg = Σ delta_i   (sum of noise scalars, random Fp values)
+2. va = v - delta.agg       (adjusted plaintext)
+3. Signal edges: Σ(±coef_i × g^idx_i) = va  (sums to adjusted value)
+4. N2 noise pair (idx a, b): 
+   - ra = random
+   - rb = (ra * g^a - delta_i) / g^b
+   - T contribution: sgn²(sa) × R × delta_i = R × delta_i
+5. Signal + Noise: T = R × va + R × Σ delta_i = R × (va + delta.agg) = R × v
+```
+
+**Result**: `T_l = R_l × v_l` EXACTLY for every layer.
+
+**For V2 wrapping (2 layers)**:
+```
+T[0] = R0 × (v + m)       ← mask added to plaintext
+T[1] = R1 × (-m)          ← mask negation
+T[0]/R0 + T[1]/R1 = (v+m) + (-m) = v   ← mask cancels, v EXACT
+```
+
+**Implications**:
+- Noise edges are NOT for correctness but for sigma vector obscuring
+- T/R = v is exact, so there is ZERO decryption error in PVAC
+- All 44 layer T values in main challenge satisfy T_l = R_l × v_l EXACTLY
+- If v has special structure (e.g., ASCII text packed as Fp), T inherits that structure multiplied by R
+
+### 79. BOUNTY2 PIPELINE FULLY VERIFIED
+
+```
+a=1: dec_value = 1 ✓  (manual Σ(T/R) = 1 ✓)
+b=2: dec_value = 2 ✓
+a+b: sum.ct has 4 layers, decrypts correctly
+lpn_s HW = 2047/4096 (near 50% as expected)
+R1*R2*R3 = R ✓ for all layers
+```
+
+Edge.w was changed from `Fp` to `vector<Fp>` after bounty2 was created.
+Fixed by: `putFp(o, e.w)` → `putFp(o, e.w[0])` and `e.w = getFp(i)` → `e.w = {getFp(i)}`
+
+### 80. ATTACK IDEAS FROM T = R × v
+
+Since T = R × v:
+1. **GCD attack**: For V2 wrapping, T[0] = R0(v+m), T[1] = R1(-m). 
+   GCD(T[0], T[1]) in Fp? Not meaningful — Fp is a field, every nonzero element divides every other.
+   
+2. **Factorization**: T = R × v in GF(P). If v is "small" (< 2^120 for ASCII), 
+   then T = R × v where v has 120-bit magnitude and R has 127-bit magnitude.
+   Finding (R, v) from T is equivalent to "partial approximate GCD" or "short vector in lattice."
+   
+3. **Lattice attack on T**: If plaintext v is short (small as integer), then T ≡ 0 (mod v).
+   Finding short v such that R = T/v is in valid range... this is a lattice problem!
+   
+4. **Multi-CT constraint**: For CT[0], v ∈ [1, 315]. T = R × v, so T ≡ 0 mod v.
+   Test each v: R_candidate = T / v_candidate. But which T? 
+   V2 wrapping: T0/R0 + T1/R1 = v. Two unknowns (R0, R1), one equation.
+   UNLESS T0 and T1 have a structural relationship via the mask m...
+
+5. **Mask elimination**: T0 = R0(v+m), T1 = R1(-m).
+   T0/R0 = v+m, T1/R1 = -m → T0/R0 + T1/R1 = v
+   Also: m = -T1/R1, so T0/R0 = v - T1/R1 → T0*R1 = R0*R1*v + T1*R0
+   This gives: T0*R1 - T1*R0 = R0*R1*v
+   Still 3 unknowns (R0, R1, v), 1 equation.
+
+### 81. MAIN CHALLENGE STRUCTURE (FULLY PARSED)
+
+secret.ct format: `OCTRA-HFHE-BTY02` magic (16B) + n_cts(u64=22) + per-CT: len(u64) + PVAC blob
+
+All 22 CTs have **identical structure**:
+- ver=3, slots=1, nL=2 (V2 wrapping), c0=0
+- 2 BASE layers per CT (NO PROD layers!)
+- nPC=1 per layer (single Pedersen commitment)
+- All R values INDEPENDENT (44 unique seeds)
+
+Edge counts per CT:
+```
+CT[0]=43, CT[1]=47, CT[2]=54, CT[3]=56, CT[4]=57, CT[5]=67, CT[6]=68,
+CT[7]=72, CT[8]=67, CT[9]=80, CT[10]=80, CT[11]=84, CT[12]=94, CT[13]=92,
+CT[14]=96, CT[15]=95, CT[16]=108, CT[17]=105, CT[18]=109, CT[19]=116,
+CT[20]=120, CT[21]=119
+Total: 1829 edges across 44 layers
+```
+
+**System of equations**:
+- 22 equations: v_i = T[i,0]/R[i,0] + T[i,1]/R[i,1]
+- 44 unknowns: R values (each 127-bit Fp)
+- 22 unknowns: v values (plaintext chunks)
+- Under-determined: 66 unknowns, 22 equations
+
+**Plaintext constraints**:
+- CT[0]: v = length byte (1-255), VERY small
+- CT[1..21]: v = 15-byte ASCII chunk, max ~120 bits
+- All printable ASCII: bytes in [0x20, 0x7E]
+
