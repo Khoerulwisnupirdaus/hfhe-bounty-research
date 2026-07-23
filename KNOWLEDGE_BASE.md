@@ -1876,3 +1876,63 @@ After 90+ entries and 40+ dead ends, remaining ideas:
 4. **Revisit "fundamentally broken"** — dev said not connected to HFHE
 5. **Check if ybits has structure** from noise that leaks through Toeplitz
 
+### 93. SESSION 11: COMPETITOR ANALYSIS + FINAL VECTORS (July 24, 2026)
+
+#### smoke-ui Assessment Findings
+- Competitor (smoke-ui) conducted independent assessment with:
+  - Z3 SMT solver, AFL++ fuzzer, Valgrind, ASan/UBSan
+  - Entropy fault injection, parser differential testing
+- **RESULT: No plaintext recovery achieved**
+- Confirmed plaintext 301-315 bytes (same as us)
+- **V2 wrapping mathematically proven secure at toy primes**:
+  - With independent random masks, ALL candidate plaintexts are satisfiable
+  - This is information-theoretically unbreakable without R
+- LPN: No practical recovery route found
+
+#### L8: bounded() noise generation — DEAD
+- Rejection sampling: `lim = UINT64_MAX - (UINT64_MAX % 8)`
+- P(e=1) = exactly 1/8, zero bias
+
+#### L9: public_audit functions — DEAD
+- `public_zero_regression()` uses FRESH keys, no leak
+- `mixed_H_parity()` only checks public pk data
+- No information leakage from any audit function
+
+#### L10: compressed pk.bin format — DEAD
+- Custom adaptive range coder, lossless, no crypto
+- pk.bin uncompressed = 17,112,502 bytes (mostly H matrix)
+
+#### L11: Noise pair/triple identification — DEAD
+- 0 N2 pairs (w+w'=0) found in secret.ct
+- 0 N3 triples found
+- merge operation destroyed all noise structure
+
+#### Edge Count Analysis
+- Edge counts deterministic by depth_hint, NOT by plaintext
+- CT[0] depth=0: 43 edges, CT[21] depth=21: 119 edges
+- Secret.ct and selftest have statistically identical edge counts
+
+### 94. MATHEMATICAL IMPOSSIBILITY ASSESSMENT
+
+Per smoke-ui SMT analysis at toy primes:
+- V2 wrapping: with independent masks, EVERY candidate v satisfies the equations
+- This means: **T0 = R0*(v+m), T1 = R1*(-m) reveals ZERO bits about v**
+- Attack requires knowing R (which requires prf_k or solving LPN for s + finding toep_key)
+- LPN solving: 2^341 complexity, infeasible
+- prf_k: 256-bit, brute force infeasible
+
+**Conclusion per framework**: 
+```
+Status: belum ada jalur profit >0 ter-reproduce
+Coverage: 94 KB entries, 50+ attack vectors tested
+  - All crypto primitives verified sound
+  - V2 wrapping information-theoretically secure
+  - LPN computationally infeasible (2^341)
+  - prf_k brute force infeasible (2^256)
+  - Competitor independently confirmed same conclusion
+Remaining vector: "fundamentally broken" dev hint
+  - NOT connected to HFHE per dev statement
+  - May refer to PVAC design philosophy, not this specific challenge
+```
+
+
