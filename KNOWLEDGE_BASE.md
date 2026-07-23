@@ -1745,3 +1745,82 @@ is plaintext/wallet payload recovery from secret.ct"
 - Is public_T_hex = T = R × v the key leverage point?
 - Can we use the fact that ALL 44 LPN sample sets share the SAME s?
 
+### 85. SESSION 10: MULTI-ATTACK RESULTS (July 23, 2026)
+
+**Tool**: `attack_T.cpp` — 6 attacks on T values
+
+#### Attack 1: Edge Collision — 56 COLLISIONS FOUND
+- Same idx, opposite ch pairs found across most CTs
+- Weight ratios (coef_i/coef_j) all look full-range random
+- R² extraction NOT feasible: coef product unknown, ratio is random
+- **CONFIRMED DEAD** for R extraction
+
+#### Attack 2: GCD of T Values
+- GCD(T[0,L0], T[1,L0]) = 4 (small)
+- GCD(T[1,L0], T[2,L0]) = 1
+- No common large factors → T values are "coprime-like"
+- **DEAD END**
+
+#### Attack 3: Minimum Weight Bit-Length
+- All CTs: min weight ≈ 121 bits (out of 127)
+- Weights are full-range, no evidence of small R values
+- **DEAD END**
+
+#### Attack 5: Weight Ratios
+- All coef ratios look uniformly random in Fp
+- No small integer ratios found
+- Signal/noise edges CANNOT be distinguished by weight ratios
+- **DEAD END**
+
+#### Attack 6: 🔥 PLAINTEXT LENGTH DISCOVERY
+- 22 CTs = 1 length CT + 21 data CTs
+- enc_text packs 15 bytes per CT
+- **Plaintext length L ∈ [301, 315] bytes**
+- This is WAY longer than a wallet private key (44-52 chars)
+- Manifest says: "follow the recovered instructions"
+- **Plaintext = instructions text + wallet private key**
+- All printable ASCII (English instructions + base58 key)
+
+### 86. PEDERSEN COMMITMENT ANALYSIS (DEEP DIVE)
+
+```
+PC[j] = R_inv_j * G + rho_j * H
+```
+Where:
+- R_inv_j = fp_inv(R[j]) — inverse of layer R value
+- rho_j = SHA256(PRF_RHO + prf_k + nonce + slot)
+- G, H = Ristretto255 generators
+
+**PC commits to R_inv**, not v. Even with PC, cannot extract R without rho (blinding).
+rho depends on prf_k (256-bit secret). **DEAD END**.
+
+**Algebraic relation**: T0*PC0 + T1*PC1 = v*G + (T0*rho0+T1*rho1)*H
+This gives a Pedersen commitment on v, but cannot open without rho_combined.
+
+### 87. R_COM DOES NOT BIND R (CONFIRMED AGAIN)
+
+```
+R_com = SHA256("pvac.dom.r_com" + canon_tag + ztag + nonce_lo + nonce_hi + len)
+```
+R values are NOT included in R_com hash! Only public metadata.
+This was BUG-001 but doesn't help for decryption.
+
+### 88. V2 MASK ANALYSIS
+
+```
+m = rand_fp_nonzero()  // truly random, full 127-bit
+T0 = R0*(v+m), T1 = R1*(-m)
+```
+Mask m is independent per CT, from CSPRNG. No structure exploitable.
+Each CT has 3 unknowns (R0, R1, m) per equation pair → underdetermined.
+
+### 89. APPROACHES CONFIRMED DEAD THIS SESSION
+
+1. ❌ Edge collision R² extraction (56 collisions, all random ratios)
+2. ❌ GCD of T values (coprime)
+3. ❌ Small weight / small R (all full-range)
+4. ❌ Weight ratio distinguisher (all random)
+5. ❌ Pedersen commitment opening (needs rho from prf_k)
+6. ❌ R_com R binding (doesn't include R)
+7. ❌ V2 mask structure (truly random)
+
