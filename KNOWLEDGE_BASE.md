@@ -1824,3 +1824,55 @@ Each CT has 3 unknowns (R0, R1, m) per equation pair → underdetermined.
 6. ❌ R_com R binding (doesn't include R)
 7. ❌ V2 mask structure (truly random)
 
+### 90. 🔥 LPN SAMPLES = YBITS FOR R1 (CONFIRMED)
+
+**Key realization**: LPN sample y values ARE the ybits used in prf_R_core!
+
+```
+lpn_make_ybits(pk, sk, seed, "pvac.prf.r.1"):
+  AES key = derive_aes_key(pk, sk, seed, "pvac.prf.r.1")
+  For each row r=0..16383:
+    A_row = AES-CTR(key, nonce) → SAME rows as in LPN samples
+    y_r = <A_row, s> ⊕ e_r
+  Return ybits = [y_0, y_1, ..., y_16383]
+```
+
+LPN samples give us exactly these (A_r, y_r) pairs.
+So **ybits_R1 is KNOWN** (directly from LPN sample y values)!
+
+**BUT**: Still need toep_key to compute R1:
+```
+R1 = hash_to_fp_nonzero(toep_127(top_R1, ybits_R1))
+top_R1 = AES-CTR(toep_key, toep_nonce ^ fnv1a("pvac.prf.r.1"))
+toep_key = derive_aes_key(pk, sk, seed, "pvac.prf.toep")
+```
+toep_key depends on prf_k (256-bit secret). Cannot compute R1 without it.
+
+**What we know**: ybits_R1 (16384 bits, with ~12.5% noise from LPN error)
+**What we don't know**: toep_key, top_R1, R1, R2, R3, v, m
+
+### 91. TOEPLITZ HASH IS THE BARRIER
+
+The PRF pipeline: LPN → Toeplitz → hash_to_fp → R
+
+Even with ybits known:
+- toep_127(top, ybits) = GF(2) polynomial multiplication
+- top = AES-CTR(toep_key, toep_nonce) → 16511 bits
+- Without top, ybits → R is random mapping
+- top for R1/R2/R3 use SAME toep_key but different nonces
+- AES-CTR output with different nonces → independent
+
+**To bypass Toeplitz, would need**:
+1. Recover toep_key (from prf_k) — 256-bit, infeasible
+2. Find algebraic relation between ybits and T values — blocked by hash_to_fp
+3. Side-channel on AES-CTR — not applicable (offline challenge)
+
+### 92. REMAINING UNEXPLORED VECTORS (UPDATED)
+
+After 90+ entries and 40+ dead ends, remaining ideas:
+1. **Quantum/lattice reduction on the Toeplitz hash** — theory only
+2. **Multi-instance LPN correlation** — 44 instances, same s, different A
+3. **plaintext structure exploitation** — 301-315 bytes printable ASCII
+4. **Revisit "fundamentally broken"** — dev said not connected to HFHE
+5. **Check if ybits has structure** from noise that leaks through Toeplitz
+
