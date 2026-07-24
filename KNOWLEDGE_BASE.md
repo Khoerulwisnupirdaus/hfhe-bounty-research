@@ -1970,3 +1970,70 @@ All vectors from KB 23.9 "REMAINING UNEXPLORED" now resolved:
 7. ~~rist_H() dead code~~ → Ristretto H correct
 8. ~~merge w=0 sigma≠0~~ → 0 zero-weight edges found
 9. ~~Homomorphic ops~~ → no new information produced (this session)
+
+### 97. BLOCKCHAIN + WALLET FORMAT ANALYSIS
+
+#### Octra Network Infrastructure
+- **RPC endpoint**: `https://octra.network/rpc` (JSON-RPC)
+- **Explorer**: `https://octrascan.io` (live mainnet)
+- **Webcli repo**: `https://github.com/octra-labs/webcli`
+- **CoinMarketCap ID**: 39914 (OCT has market price)
+
+#### Bounty Address: `octC5eR9pLGKbpzTbDgHowkFt8HW7LZYb2gzehzxHamxuAZ`
+- RPC balance query returns 429 (rate limited) — needs retry with backoff
+- Address format: "oct" + base58 encoding of 32-byte Ed25519 public key
+- Total address length: 44 characters
+
+#### Wallet/Key Format (from webcli source)
+- **Private key**: Ed25519 via TweetNaCl — sk[64] bytes
+- **Public key**: pk[32] bytes  
+- **Storage**: base64-encoded (`priv_b64`)
+- **Mnemonic**: BIP39 wordlist support (HD wallet)
+- **HD derivation**: supported (hd_version=1, hd_index)
+
+#### Plaintext Format Constraint (REFINED)
+README says plaintext = "private key and metadata associated with the address"
+So plaintext likely contains:
+1. Ed25519 private key (64 bytes raw or 88 chars base64)
+2. Address string (44 chars)  
+3. Metadata (instructions to claim reward)
+Total: 301-315 bytes, printable ASCII
+
+#### RPC Methods Available
+- `octra_balance` — get address balance
+- `octra_transactionsByAddress` — get tx history
+- `octra_submit` — submit transaction
+- `node_status`, `node_stats`, `octra_supply` — network info
+
+#### TODO
+- [x] Query balance — **500,001.000001 OCT** + 2M Penguplush tokens
+- [x] Check if bounty wallet has any transactions — YES, 5 incoming, 0 outgoing
+- [ ] Study webcli keygen to understand exact plaintext encoding
+- [ ] Investigate unlock_trusted() contract call
+- [ ] Study developer address octC9DGJX...
+
+### 98. ON-CHAIN ANALYSIS RESULTS (Camofox browser)
+
+#### Balance: 500,001.000001 OCT + 2,000,000 Penguplush
+#### Nonce: 0 (never signed a tx — private key has NEVER been used to send)
+
+#### Transaction History (5 total, all incoming):
+1. **+1 OCT** from octC9DGJ... (epoch 1327831, July 10 12:52)
+2. **1M Penguplush transfer** from octC9DGJ... (epoch 1325599, July 10 06:30)
+3. **1M Penguplush transfer** from octC9DGJ... (epoch 1325597, July 10 06:29)
+4. **unlock_trusted()** from octCVXhf... → oct6Nqof... (epoch 1325113, July 10 05:06) — SMART CONTRACT CALL
+5. **+500K OCT** from oct7xCoz... (epoch 1319790, July 9 13:52) — INITIAL FUNDING
+
+#### Key Observations:
+- Developer address: octC9DGJX... (sent OCT + Penguplush)
+- Funder address: oct7xCoz... (sent 500K OCT initial bounty)
+- unlock_trusted() = circle/contract mechanism on Octra network
+- Nonce=0 means private key has NEVER been used — any valid signature would be first ever
+
+#### PVAC Webcli Source Findings:
+- HFHE ciphertext prefix: "hfhe_v1|"
+- Range proof prefix: "rp_v1|"
+- Zero-knowledge proof prefix: "zkzp_v2|"
+- pvac_dec_value returns Fp = {lo: uint64, hi: uint64} — plaintext is 128-bit number
+- pvac_keygen_from_seed takes 32-byte seed
+- pvac_enc_value_seeded takes uint64 val + 32-byte seed → deterministic encryption!
