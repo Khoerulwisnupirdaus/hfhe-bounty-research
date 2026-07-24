@@ -2160,3 +2160,33 @@ CT[0]: plaintext = length (1-315)
 - 1 equation, 2 unknowns → insufficient alone
 - But 22 CTs × 2 unknowns = 44 unknowns total, all different R
 
+### 103. EDGE ANALYSIS (CT[0] FULLY DUMPED)
+
+CT[0] has 43 edges: L0=22 edges, L1=21 edges.
+- All (layer, idx, sign) tuples unique — no merge collisions
+- Indices spread across 0-336, density ~3% → most edges are single-origin
+- L0: 8 signal + 14 noise (7 N2 pairs), L1: 8 signal + 13 noise
+
+#### Edge weight structure:
+- Each edge weight w = R * coefficient
+- R is per-layer constant, coefficient is per-edge
+- R cancels in weight ratios within same layer
+- Signal coef = known function of plaintext + random
+- Noise coef = random (cancels in aggregate)
+
+#### Aggregate values (public):
+- Layer0 agg = Σ sign*w*powg_B[idx] = R0 * (v+m) for sub-cipher encrypting v+m
+- Layer1 agg = Σ sign*w*powg_B[idx] = R1 * (-m) for sub-cipher encrypting -m
+- Total: agg0*R0_inv + agg1*R1_inv = v (the plaintext)
+
+#### Include ordering bug:
+- Including pvac_artifact_serialize.hpp + pvac.hpp simultaneously causes "bad magic" crash
+- Use ONLY pvac_artifact_serialize.hpp (it already includes what's needed)
+
+### Next attack vectors (H#):
+- H#1: Can we exploit the known-small-plaintext constraint on CT[0]?
+  v ∈ [1,315], agg0*R0_inv + agg1*R1_inv = v
+  This constrains the RATIO R0/R1 to a set of 315 values
+- H#2: Can we verify R extraction via bounty2 known-sk training ground?
+- H#3: Are noise delta values deterministic given the layer seed?
+  If so, signal coefs are recoverable from edges.
