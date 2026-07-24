@@ -2064,3 +2064,39 @@ From pvac_c_api.cpp:
 - It was emitted on-chain in the unlock_trusted event
 - It's exactly 32 bytes (seed size for PVAC keygen)
 - If this IS the private key seed, then dec_value should produce it
+
+### 100. EXACT PLAINTEXT ENCODING (CONFIRMED from source code)
+
+**File**: `hfhe-challenge/source/hfhe_bounty_artifact.cpp`
+**Plaintext source**: `plaintext.txt` (private, developer-only)
+**Encryption function**: `enc_text(pk, sk, plaintext_string)`
+
+#### enc_text encoding:
+```
+cts[0] = enc_value(msg.length())     // first CT = encrypted string length
+cts[1] = enc_fp(bytes[0:15])         // 15 bytes per Fp block
+cts[2] = enc_fp(bytes[15:30])
+...
+cts[N] = enc_fp(bytes[(N-1)*15:N*15])
+```
+
+#### Fp packing: `pack_15_bytes_to_fp`
+- 15 bytes packed into Fp = {lo: uint64, hi: uint64}
+- lo = bytes[0..7] (little-endian), hi = bytes[8..14] (little-endian)
+- Only 120 bits used of 127-bit Mersenne field (2^127-1)
+
+#### secret.ct has 22 ciphertexts:
+- cts[0] = encrypted length (uint64)
+- cts[1..21] = 21 data blocks × 15 bytes = **up to 315 bytes of plaintext**
+- Actual length = cts[0] decrypted value
+
+#### Winning condition from manifest.json:
+"recover plaintext from secret.ct using public files only; **follow the recovered instructions**"
+
+#### CONCLUSION:
+Plaintext is ASCII text containing **instructions** (e.g., private key + how to claim reward)
+The plaintext is NOT purely numeric — it's a human-readable text string
+
+#### Address pubkey (confirmed):
+oct + base58(pubkey) → pubkey = a4a12fb15de6fd821f9415a2ae23c9483cd80b0256f787d6765b0c7f4d41aef2
+0x4819... from unlock_trusted is NOT the private key (tested, no match)
