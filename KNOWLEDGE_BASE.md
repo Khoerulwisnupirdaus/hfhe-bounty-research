@@ -14,7 +14,7 @@
 - **Status**: ⚠️ Challenge V2 is STILL ACTIVE! Only V1 was cancelled (R_com oracle issue).
 - **Reward**: 500K OCT (wallet claim) + 500K OCT (contact dev@octra.org) = **1,000,000 OCT total** (or USDC equivalent)
 - **Wallet**: `octC5eR9pLGKbpzTbDgHowkFt8HW7LZYb2gzehzxHamxuAZ`
-- **Dev hint**: Lambda said system was "fundamentally broken". V1 was cancelled because "didn't connect to HFHE". Therefore V2 break MUST be through HFHE mechanism (see Section 12 CRITICAL DEDUCTION).
+- **Dev hint**: Lambda said system was "fundamentally broken" and this break IS connected to HFHE/FHE. V1 was cancelled for a different reason (R_com oracle). The fundamental break applies to the FHE mechanism itself.
 
 ### ADDITIONAL BOUNTIES IN THE SAME REPO (pvac_hfhe_cpp):
 | Bounty | Path | Task | Reward | Has sk.bin? |
@@ -2100,3 +2100,63 @@ The plaintext is NOT purely numeric — it's a human-readable text string
 #### Address pubkey (confirmed):
 oct + base58(pubkey) → pubkey = a4a12fb15de6fd821f9415a2ae23c9483cd80b0256f787d6765b0c7f4d41aef2
 0x4819... from unlock_trusted is NOT the private key (tested, no match)
+
+### 101. CIPHERTEXT STRUCTURE ANALYSIS (PARSED)
+
+All 22 CTs parsed with native C++ deserializer:
+- **All slots = 1**, all c0 = zero, all layers = 2 BASE (V2 wrapping)
+- **Edge counts**: CT[0]=43, CT[1]=47, ..., CT[21]=119
+- Edges grow with depth: Budget(d=0)→~43, Budget(d=22)→~119
+- CT[0] = weakest (depth=0, only 43 edges), encrypts string LENGTH (1-315)
+- V2 wrapping = fuse(enc(v+m), enc(-m)) → 2 BASE layers per CT
+
+#### Budget model:
+- depth 0: cap=128 bits → ~43 edges (8 sig + ~35 noise)
+- depth 2: cap=160 bits → ~47 edges
+- depth 22: cap=480 bits → ~119 edges
+
+#### Attack surface:
+- CT[0] encrypts a SMALL value (1-315) — easiest target for brute force
+- But 43 edges with m=8192 columns still = massive search space
+- 22 CTs share the same pk/sk — multi-CT constraint analysis possible?
+
+### 102. DECRYPTION EQUATION & R_COM VULNERABILITY (CRITICAL)
+
+#### Decryption equation (from decrypt.hpp):
+```
+plaintext = c0 + Σ sign(e) * w_e * powg_B[idx_e] * R_inv[layer(e)]
+```
+- c0 = 0 (from V2 wrapping)
+- w_e, idx_e, sign(e) = PUBLIC (in ciphertext edges)
+- powg_B[idx] = PUBLIC (in public key)
+- **R_inv = ONLY SECRET** — derived from prf_R_slots(pk, sk, seed)
+
+#### R derivation:
+- R = r1 * r2 * r3 where ri = prf_R_core(pk, sk, seed, domain)
+- prf_R_core uses LPN with sk, then Toeplitz hash
+- LPN matrix is also sk-dependent (AES key from sk)
+
+#### R_com DOES NOT hash R values!
+```cpp
+compute_R_com_base(canon_tag, ztag, nonce_lo, nonce_hi, R_slots) {
+    SHA256("pvac.dom.r_com" || canon_tag || ztag || nonce_lo || nonce_hi || R_slots.size())
+    // R_slots VALUES ARE NOT INCLUDED IN THE HASH!
+}
+```
+**Verified**: R_com in stored ciphertext = all zeros (stripped/placeholder)
+
+#### Sigma bitvector NOT used in decryption!
+Edge has `e.s` (8192-bit bitvector) stored in ciphertext but decrypt code ignores it.
+Sigma only matters for homomorphic operations, not for decrypt.
+
+#### Simplified attack model:
+For each CT with slots=1, 2 layers:
+- plaintext = A * R0_inv + B * R1_inv
+- A = Σ(layer-0 edges) sign(e) * w_e * powg_B[idx_e]  ← computable
+- B = Σ(layer-1 edges) sign(e) * w_e * powg_B[idx_e]  ← computable
+- R0_inv, R1_inv = unknowns (each ~127 bits)
+
+CT[0]: plaintext = length (1-315)
+- 1 equation, 2 unknowns → insufficient alone
+- But 22 CTs × 2 unknowns = 44 unknowns total, all different R
+
