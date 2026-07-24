@@ -2687,8 +2687,38 @@ Pohlig-Hellman: could extract R mod small primes, BUT requires knowing T (plaint
 6. Whether multiple CTs sharing same sk create a lattice attack opportunity
 7. The Toeplitz hash step in prf_R_core — any weakness in the hash-to-127-bit compression?
 
+### 140. BOUNTY CTs USE LPN R DERIVATION (CONFIRMED)
+
+All 44 layers (22 CTs × 2 layers) use `prg_layer_ztag` (LPN-based), NOT `ru_ztag` (RU/native).
+- `is_ru = FALSE` for ALL layers
+- `lpn_ztag` matches 100% for ALL layers
+→ R derived via `prf_R_slots → prf_R → prf_R_core` (triple LPN product)
+→ RU shortcut (R = 1/(a²+1)) does NOT apply to bounty CTs
+
+### 141. RECRYPT FILES SCANNED (17 FILES)
+
+- recrypt_fold.hpp (128L) — layer deduplication/optimization, NOT an attack surface
+- recrypt_hidden_coeff.hpp (232L) — proof infrastructure for native runtime, NOT exploitable
+- recrypt_eval.hpp (314L) — execution planning, no R references
+- recrypt_src_core.hpp (109L) — RU R derivation (not used by bounty, but reveals R = 1/(a²+1) formula)
+- recrypt_ru.hpp — RU/native encryption (wrapper around enc_fp_depth_seeded)
+- NOT YET READ: recrypt_arith_proof.hpp, recrypt_chosen_privacy.hpp, recrypt_com.hpp,
+  recrypt_com_reset.hpp, recrypt_layer_proof.hpp, recrypt_native_cert.hpp,
+  recrypt_proof_profile.hpp, recrypt_runtime_eval.hpp, recrypt_src.hpp,
+  recrypt_stage_eval.hpp, recrypt_stage_link.hpp
+
+Most unread files are proof/verification infrastructure — unlikely attack surface.
+
+### 142. DEAD END UPDATE
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 26 | RU R derivation bypass | Bounty CTs use LPN, not RU |
+| 27 | recrypt_fold exploitation | Just deduplication, no crypto |
+| 28 | recrypt_hidden_coeff exploitation | Just proof validation |
+
 **Active H# (max 3)**:
-- H#1: Read recrypt_fold.hpp — the actual FHE bootstrap (NEVER explored)
-- H#2: Noise structure identification — can we separate signal from noise edges?
-- H#3: Toeplitz hash weakness in prf_R_core compression step
+- H#1: Noise structure identification — can we separate signal from noise edges?
+- H#2: Toeplitz hash weakness in prf_R_core compression step
+- H#3: Lattice attack using multiple CTs with same sk
 
