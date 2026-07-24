@@ -1935,4 +1935,38 @@ Remaining vector: "fundamentally broken" dev hint
   - May refer to PVAC design philosophy, not this specific challenge
 ```
 
+### 95. SESSION 12: HOMOMORPHIC OPS + STRUCTURAL CHECKS (July 24, 2026)
 
+#### Surprise Check Results
+- **c0 values**: ALL ZERO across all 22 CTs ✓ (expected)
+- **R_com in raw bytes**: NOT all-zero (0 all-zero 32-byte windows). R_com has data but likely public metadata hash
+- **omega_B = powg_B[1]^24**: Different root of unity but gcd(24,337)=1, so still primitive. NOT a bug
+- **H matrix**: All 16384 columns unique, weight 192-193 (exactly h_col_wt). Full rank
+- **UBK perm**: NOT identity (proper permutation applied)
+
+#### Homomorphic Operations Attack Results
+1. **ct_square(CT[1])**: 5 layers (2 BASE T=0, 3 PROD with T=products of original T). PROD T = deterministic function of known T values
+2. **ct_add(CT,CT)**: Layer concatenation, NOT merge. T values duplicate, not sum
+3. **ct_sub(CT,CT) = enc(0)**: 4 layers, ALL non-zero T values → V2 wrapping prevents zero detection ✓
+4. **ct_mul(CT[1],CT[2])**: 8 layers (4 BASE + 4 PROD). PROD T = cross-products of BASE T values
+5. **ct_add_const sweep**: PROD_T_sum UNCHANGED by constant c → c0 doesn't affect edge structure
+
+**CONCLUSION**: Homomorphic operations produce NO new information. All T values are deterministic functions of already-known BASE T values.
+
+#### Git History Check
+- v1: `seed.ct` (235KB) + `hfhe_seed_artifact.cpp` — already in KB Section 22
+- v2: `secret.ct` (1.96MB) + `hfhe_bounty_artifact.cpp` — different plaintext/key
+- pk.bin size matches between v1 and v2 commits — already investigated
+
+### 96. TOTAL DEAD END COUNT: 55+
+
+All vectors from KB 23.9 "REMAINING UNEXPLORED" now resolved:
+1. ~~#499 hidden_coeff~~ → checked, not exploitable
+2. ~~#503 rist_decode~~ → checked, not exploitable  
+3. ~~#501 R² leak~~ → checked, coef product unknown
+4. ~~LPN coupling~~ → bounded() has zero bias
+5. ~~Toeplitz invert~~ → needs key
+6. ~~Multi-instance~~ → 720k << 2^341
+7. ~~rist_H() dead code~~ → Ristretto H correct
+8. ~~merge w=0 sigma≠0~~ → 0 zero-weight edges found
+9. ~~Homomorphic ops~~ → no new information produced (this session)
