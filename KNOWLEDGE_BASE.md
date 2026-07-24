@@ -2037,3 +2037,30 @@ Total: 301-315 bytes, printable ASCII
 - pvac_dec_value returns Fp = {lo: uint64, hi: uint64} — plaintext is 128-bit number
 - pvac_keygen_from_seed takes 32-byte seed
 - pvac_enc_value_seeded takes uint64 val + 32-byte seed → deterministic encryption!
+
+### 99. SMART CONTRACT ANALYSIS (unlock_trusted)
+
+#### Contract: oct6NqofXkYwY382qAANAvRfk8WAJK5mikviiAA482nBJY4
+- Type: program (smart contract)
+- Owner: octCVXhfk2Ejvq7n1hzNpovgQo25tWsSTAT2F4ADmoYS73H
+- Code hash: 15d224f7a37691f48cc155283eb03b9493581f49ac94167bf3bb86ac8350246d
+- This is the **Penguplush token contract**
+
+#### unlock_trusted() Call Details:
+- Caller: octCVXhfk... (contract owner)
+- Args: [bounty_address, 1000000, 0x4819026a31deb02c3f4f4f49408cf79934dd5a111f6d813ca498b96e883657b6]
+- Event: Unlocked(bounty_addr, 1000000, 0x4819...)
+- The 32-byte hex string is a **commitment or hash** tied to the bounty
+
+#### CRITICAL INSIGHT: PLAINTEXT FORMAT
+From pvac_c_api.cpp:
+- pvac_dec_value returns Fp = {lo: uint64, hi: uint64}
+- Plaintext is a 128-BIT NUMBER, not a text string
+- The bounty README says "private key and metadata" but this must be encoded as Fp elements
+- The plaintext could be the Ed25519 private key seed (32 bytes = 256 bits = 4 x uint64)
+- OR the 32-byte hex from unlock_trusted (0x4819...)
+
+#### HYPOTHESIS: The 32-byte value 0x4819026a... could BE the answer
+- It was emitted on-chain in the unlock_trusted event
+- It's exactly 32 bytes (seed size for PVAC keygen)
+- If this IS the private key seed, then dec_value should produce it
