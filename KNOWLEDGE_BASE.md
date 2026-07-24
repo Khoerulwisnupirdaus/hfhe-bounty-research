@@ -2573,8 +2573,68 @@ Possible exploitation paths:
    a way to cancel/determine rho
 3. Multiple PCs with same sk.prf_k might reveal something when H is buggy
 
+### 131. CROSS-CT RHO ANALYSIS
+
+rho_j = SHA256("pvac.prf.rho" || sk.prf_k || nonce || j)
+- sk.prf_k is SHARED across all CTs (same key)
+- nonce is UNIQUE per layer (random 128-bit)
+- j = slot index (always 0 for slots=1)
+
+For two layers i, j: rho_i - rho_j ≠ 0 (different nonces → different hashes).
+Can't cancel H term by subtracting PCs.
+
+Can't brute-force sk.prf_k (256 bits).
+Can't predict rho without sk.prf_k.
+
+→ Cross-CT rho analysis is a DEAD END without exploiting H_buggy further.
+
+### 132. PUBLIC AUDIT FUNCTIONS ANALYZED
+
+- `public_layer_slot0(pk, c, lid)` = computes public aggregate = our known gA[lid]
+- `base_layers_are_public_nonzero` = checks all layer aggs ≠ 0 (confirms wrapping works)
+- `mixed_H_parity` = statistical check on H matrix columns
+- `mixed_sigma_parity` = statistical check on sigma vectors
+- `small_H_rank_regression` = GF2 rank check on small H
+
+None of these are attack vectors. They're just validation.
+
+### 133. DEAD ENDS CONFIRMED (TOTAL: 25)
+
+| # | Approach | Result |
+|---|----------|--------|
+| 1-17 | See §108 | Various pre-existing dead ends |
+| 18 | ct_square for new equations | Self-consistent, no new info |
+| 19 | Edge ordering leakage | Fisher-Yates csprng, uniform random |
+| 20 | R_com exploitation | Not serialized, dead end |
+| 21 | Seed brute-force on bounty CTs | Uses OS csprng, not seeded |
+| 22 | H == identity? | NO |
+| 23 | H == small k*G? | NO for k ≤ 10000 |
+| 24 | Direct DLog on buggy H | ~2^252, infeasible |
+| 25 | Cross-CT rho cancellation | Different nonces, can't cancel |
+
+### 134. UPDATED STATE (July 24, 2026 22:41 WIB)
+
+**Session achievements (14d-14f):**
+- Created Erdős-style ATTACK_PROMPT.md
+- Verified ct_square mechanics experimentally
+- Confirmed R_com bug (doesn't hash R) — not exploitable
+- Extracted all 44 PC values
+- Mapped full R derivation chain (triple LPN)
+- Analyzed all arithmetic ops (ct_add, ct_mul, ct_square, etc.)
+- Built complete equation inventory (7 equations, none solvable alone)
+- **DISCOVERED rist_H() Elligator2 bug — H point is NON-STANDARD** 🔥
+- Analyzed edge structure (43 edges, noise decomposition)
+- Confirmed all audit functions are validation-only
+
+**Top priority next session:**
+1. DEEP DIVE into rist_H bug exploitation — the `s_result = s` creates
+   a specific algebraic relationship. What IS this relationship mathematically?
+2. Check if `rist_encode(P_buggy) == s` implies something about the curve structure
+3. Try BABY-STEP GIANT-STEP for DLog(H_pvac, G) with larger range (up to 2^40)
+4. Investigate `recrypt_fold.hpp` — the actual FHE bootstrap mechanism
+
 **Active H# (max 3)**:
-- H#1: Exploit rist_H bug — find algebraic relation between H_pvac and G
-- H#2: Analyze if rho values across layers/CTs have common structure exploitable with buggy H
-- H#3: Check if compute_prod_layer_PC or recrypt verification code reveals R via buggy H
+- H#1: Mathematically analyze what `s_result = s` means for the H point's DLog
+- H#2: BSGS DLog attack on H_pvac (up to 2^40, feasible in hours)
+- H#3: recrypt_fold.hpp bootstrap mechanism analysis
 
