@@ -2505,15 +2505,76 @@ Answer: NO. Different CTs have different seeds → different R → different coe
 ### 127. UPDATED STATE (July 24, 2026 22:30 WIB)
 
 **Still unexplored (priority order)**:
-1. Pedersen H point derivation — check if hash-to-group is standard/secure
+1. ~~Pedersen H point derivation~~ — DONE, see §128
 2. recrypt_fold.hpp — how does bootstrapping work? Any leakage?
 3. recrypt_stage_eval.hpp / recrypt_stage_link.hpp — stage evaluation
 4. The ACTUAL "equation" the bounty hint refers to
 5. Cross-CT analysis using common sk.prf_k structure
 6. compact_layers behavior — does it ever leak info?
 
+### 128. PEDERSEN H POINT — ELLIGATOR2 BUG CONFIRMED! 🔥
+
+**rist_H() in ristretto255.hpp has a CRITICAL BUG in the Elligator2 map:**
+
+```cpp
+// Line 735: STANDARD Ristretto: s_result = fe_abs(fe_mul(u, s))
+Fe25519 s_result = fe_abs(fe_mul(u, s));
+// Line 737: BUG — immediately OVERWRITTEN:
+s_result = s;
+```
+
+The `s_result = s` overwrites the correct computation. This produces a DIFFERENT H point.
+
+**Verified experimentally:**
+- H_correct = 6e80dcc69708226b39fbae95473ec113bc49f4076e8243fd0380f58e3b822a1f
+- H_pvac    = c8bbb3f6edabb3bd7beb0e03c1630bcbffc77d27defbc1cce416d6f7f9408961
+- H_pvac == raw `s` from fe_invsqrt (byte-for-byte identical!)
+
+**Additional dead-code in rist_H():**
+1. `r0 = fe_frombytes(hash)` appears twice (first value discarded)
+2. `ns = fe_sub(fe_add(r, fe_one()), fe_one())` → ns = r, then immediately `ns = r`
+
+**Properties of H_pvac:**
+- Valid Ristretto point (decodes successfully, T*Z == X*Y)
+- NOT the identity (non-zero coordinates)
+- NOT order 2 (2*H ≠ identity)
+- H ≠ k*G for k in [1, 10000]
+- was_square = 1 for the Elligator2 parameters
+- rist_encode(P_buggy) == raw s bytes (unusual coincidence)
+
+**Impact assessment:**
+- The bug produces a VALID but NON-STANDARD H point
+- DLog(H_pvac, G) is still likely ~2^252 (hard)
+- The PC commitment PC = sc(R_inv)*G + rho*H_pvac is still binding IF DLog is hard
+- BUT: the specific algebraic relationship s_result=s might create a
+  subtle algebraic dependency that can be exploited
+- The developer said the break is "connected to FHE" — this bug IS in the FHE crypto layer
+
+**TODO**: Investigate whether the buggy H creates any exploitable algebraic structure
+in the Pedersen commitment that allows R extraction when combined with other public data.
+
+### 129. DEAD ENDS CONFIRMED THIS SUB-SESSION
+
+| # | Approach | Result |
+|---|----------|--------|
+| 22 | H == identity? | NO — valid non-zero point |
+| 23 | H == small k*G? | NO — not for k up to 10000 |
+| 24 | Direct DLog on buggy H | Still ~2^252, infeasible |
+
+### 130. UPDATED STATE (July 24, 2026 22:38 WIB)
+
+**Key open question**: The rist_H bug IS the kind of "fundamental break connected to FHE"
+the dev mentioned. But we haven't found HOW to exploit it yet.
+
+Possible exploitation paths:
+1. The algebraic relation s_result=s might mean H_pvac has a special structure
+   in the Elligator2 preimage that creates an equation with G
+2. The PC equation PC = sc(R_inv)*G + rho*H_pvac might be solvable if there's
+   a way to cancel/determine rho
+3. Multiple PCs with same sk.prf_k might reveal something when H is buggy
+
 **Active H# (max 3)**:
-- H#1: Pedersen H point — verify hash-to-group is secure (if broken → instant win)
-- H#2: Recrypt bootstrapping mechanism — the FHE core
-- H#3: What is "THE equation" in the bounty hint? Re-read bounty3 context carefully
+- H#1: Exploit rist_H bug — find algebraic relation between H_pvac and G
+- H#2: Analyze if rho values across layers/CTs have common structure exploitable with buggy H
+- H#3: Check if compute_prod_layer_PC or recrypt verification code reveals R via buggy H
 
