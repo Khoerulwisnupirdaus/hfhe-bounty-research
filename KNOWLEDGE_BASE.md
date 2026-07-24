@@ -2190,3 +2190,127 @@ CT[0] has 43 edges: L0=22 edges, L1=21 edges.
 - H#2: Can we verify R extraction via bounty2 known-sk training ground?
 - H#3: Are noise delta values deterministic given the layer seed?
   If so, signal coefs are recoverable from edges.
+
+### 104. FULL CT PARSING (ALL 22 CTs)
+
+All 22 CTs successfully parsed. Edge counts grow with depth:
+| CT# | Edges | Depth | Pre-merge (computed) |
+|-----|-------|-------|---------------------|
+| 0   | 43    | 0     | 44 (1 collision)    |
+| 1   | 47    | 2     | ~52                 |
+| 2   | 54    | 3     | ~58                 |
+| 3   | 56    | 4     | ~62                 |
+| 4   | 57    | 5     | ~66                 |
+| ...  | ...   | ...   | ...                 |
+| 21  | 119   | 22    | ~130                |
+
+**Parser offset bug**: must use pos=16 (skip 16-byte magic), NOT pos=24.
+**Include bug**: pvac_artifact_serialize.hpp + pvac.hpp together → crash. Use ONLY the serialize header.
+
+### 105. ENC_TEXT STRUCTURE (CRITICAL)
+
+```cpp
+enc_text(pk, sk, msg):
+  CT[0] = enc_value(pk, sk, msg.size())     // depth=0, plaintext = length
+  CT[1] = enc_fp_wrapped_depth(pk, sk, block[0], depth=2)  // first 15 bytes
+  CT[2] = enc_fp_wrapped_depth(pk, sk, block[1], depth=3)
+  ...
+  CT[k] = enc_fp_wrapped_depth(pk, sk, block[k-1], depth=k+1)
+```
+
+- CT[0] encrypts the LENGTH (uint64 → Fp), depth=0
+- CT[1..21] encrypt 15-byte blocks packed via pack_15_bytes_to_fp()
+- depth_hint STARTS AT 2 and increments per block
+- Length ∈ [301, 315] (smoke-ui confirmed, 22 CTs × 15 = 315 max)
+
+### 106. NOISE BUDGET PER DEPTH
+
+```
+cap(d) = noise_entropy_bits + depth_slope_bits * max(0, d)
+       = 128 + 16*d
+c2 = 2*log2(337) ≈ 16.793
+c3 = 3*log2(337) ≈ 25.189
+n2(d) = floor(cap * 0.55 / c2)
+n3(d) = floor(cap * 0.45 / c3)
+```
+
+| Depth | cap | n2 | n3 | Pre-merge edges (one sub-cipher) |
+|-------|-----|----|----|----------------------------------|
+| 0     | 128 | 4  | 2  | 8+8+6=22                        |
+| 2     | 160 | 5  | 2  | 8+10+6=24                       |
+| 3     | 176 | 5  | 3  | 8+10+9=27                       |
+| 22    | 480 | 15 | 8  | 8+30+24=62                      |
+
+Wrapped = 2 sub-ciphers → double the pre-merge edges.
+
+### 107. FUSE MECHANICS (V2 WRAPPING)
+
+```cpp
+fuse(pk, enc(v+m), enc(-m)):
+  - Layer 0 = sub-cipher A (encrypts v+m)
+  - Layer 1 = sub-cipher B (encrypts -m), with layer_id offset
+  - c0 = A.c0 + B.c0 = 0 + 0 = 0
+  - Edges concatenated then merged IF total > edge_budget (1.2M)
+  - No cross-layer merging (different layer_ids)
+```
+
+### 108. PEDERSEN COMMITMENT (PC) IS SERIALIZED
+
+PC is stored in the ciphertext! Each BASE layer has:
+```
+PC[j] = pedersen_commit(sc_from_fp_signed(R_inv[j]), rho_j)
+       = sc(R_inv) * G + rho * H
+```
+where rho = SHA256("pvac.prf.rho" || sk.prf_k || nonce || j)
+
+- PC is a Ristretto255 point, publicly available
+- rho requires sk.prf_k (256-bit secret)
+- 44 PCs total (22 CTs × 2 layers)
+- DLP on Ristretto255 is hard (dead end #9)
+- BUT: homomorphic operations may create NEW PCs with exploitable structure
+
+### 109. SMOKE-UI COMPETITOR ASSESSMENT
+
+https://github.com/smoke-ui/octra-hfhe-v2-security-assessment
+
+Findings (all LOW/INFO):
+- OCTRA-HFHE-INFO-001: CT count narrows plaintext to 301-315 bytes
+- OCTRA-RELEASE-LOW-002: README checksum stale
+- OCTRA-PVAC-LOW-003: Pointer bounds check
+- OCTRA-PVAC-LOW-004: Noncanonical field inputs normalized
+- OCTRA-PVAC-INFO-005: R_com ambiguous lifecycle
+
+**They also FAILED to break V2.** Confirmed V2 fixed V1's public verifier vulnerability.
+
+### 110. SELECTOR USES UNIQUE POSITIONS (WITHIN SUB-CIPHER)
+
+Signal edges: Selector::fresh() picks WITHOUT replacement → 8 unique positions per sub-cipher.
+N2/N3 noise: picks randomly (MAY collide with signal positions → merge collision).
+After fuse: two independent sub-ciphers → CAN share positions → cross-cipher merge collisions.
+
+CT[0]: 44 pre-merge → 43 post-merge = exactly 1 collision.
+
+### 111. KEY STATE (July 24, 2026 20:33 WIB)
+
+**What we have**:
+- Full CT parsing working (all 22 CTs)
+- Public aggregates computable per layer
+- Edge structure fully understood
+- PC values accessible in ciphertext
+- Competitor also failed → break is non-obvious
+
+**What blocks us**:
+- R = prf_R(pk, sk, seed) requires sk
+- rho (for PC) = SHA256(domain || sk.prf_k || nonce || j) requires sk
+- delta = prf_R_noise(pk, sk, modified_seed) requires sk
+- All roads lead back to sk
+
+**Bounty3 hint**: "try to extract R from the equation"
+- "The equation" could mean PC equation, or some equation we haven't considered
+- Could relate to homomorphic PC behavior (unexplored)
+
+**Active H# (max 3)**:
+- H#1: Small-plaintext constraint on CT[0] (v ∈ [1,315])
+- H#2: Homomorphic PC behavior (how do PCs transform under ct_add/ct_mul?)
+- H#3: Verify decryption equation with bounty2 known-sk
+
