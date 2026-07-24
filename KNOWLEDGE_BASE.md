@@ -2314,3 +2314,108 @@ CT[0]: 44 pre-merge → 43 post-merge = exactly 1 collision.
 - H#2: Homomorphic PC behavior (how do PCs transform under ct_add/ct_mul?)
 - H#3: Verify decryption equation with bounty2 known-sk
 
+### 112. CT_SQUARE MECHANICS (EXPERIMENTALLY VERIFIED)
+
+ct_square(CT[0]) produces:
+- 5 layers: L0(BASE), L1(BASE), L2(PROD 0×0), L3(PROD 0×1), L4(PROD 1×1)
+- **L0 and L1 have 0 edges** — original edges NOT copied to squared cipher!
+- Only PROD repack edges exist (8 per PROD layer = 24 total)
+- c0 = 0 (since original c0=0, squared=0)
+
+PROD repack edges:
+- Target = gA[la] * gA[lb] (publicly computable from original CT)
+- Repack agg EXACTLY matches target (VERIFIED)
+- Edges encode target WITHOUT additional R multiplication
+- During decrypt: contribution = target / R_prod = gA[la]*gA[lb] / (R_la*R_lb)
+
+The math is self-consistent: v² = (gA[0]/R₀ + gA[1]/R₁)² ✅
+But no NEW equations — the square doesn't give independent info.
+
+### 113. R_COM BUG CONFIRMED (NOT EXPLOITABLE)
+
+compute_R_com_base hashes: "pvac.dom.r_com" || canon_tag || ztag || nonce || slots_count
+**R VALUES ARE NOT INCLUDED IN THE HASH!**
+All inputs are public → R_com is publicly computable.
+However: R_com is NOT serialized in the CT wire format (all zeros on deserialize).
+R_com is NOT used for any verification in the public API.
+→ Bug exists but NOT exploitable for plaintext recovery.
+
+### 114. PC (PEDERSEN COMMITMENT) EXTRACTION
+
+All 44 PCs extracted. Example:
+CT[0] L0: PC = 58b43bf8c70c89c6e9305991d3730f11e097253c85a6be18924d705fd5bafc3a
+CT[0] L1: PC = 4227cc7b0f08afec8ecece91e4c17a41de4505178e7230a233975d0dcc5fc81e
+
+PC = sc_from_fp_signed(R_inv) * G + rho * H
+
+sc_from_fp_signed maps Fp → Scalar:
+- If x ≥ 2^126 (bit 62 of hi set): return -sc_from_fp(P-x)
+- Else: return sc_from_fp(x)
+Injective since P≈2^127 < L≈2^252, but NOT multiplicatively homomorphic.
+
+rho = SHA256("pvac.prf.rho" || sk.prf_k || nonce || j) — requires sk
+
+PROD layers MUST NOT have PCs (serializer enforces this).
+
+### 115. R DERIVATION CHAIN
+
+R = prf_R_core(PRF_R1) * prf_R_core(PRF_R2) * prf_R_core(PRF_R3)
+
+Each prf_R_core does:
+1. AES key = SHA256(domain || sk.prf_k || seed)
+2. AES-CTR generates LPN matrix A (n=4096, t=16384 rows)
+3. y_bits = A * s ⊕ noise (s=sk.lpn_s_bits, noise=binomial τ=1/8)
+4. Toeplitz hash of y_bits → 127-bit value
+5. hash_to_fp_nonzero
+
+Total: 3 independent LPN instances per R. 6 per wrapped cipher.
+LPN parameters: n=4096, t=16384, τ=1/8 → complexity 2^341. Infeasible.
+
+### 116. ARITHMETIC OPERATIONS ANALYZED
+
+ct_add: concatenates layers/edges. No PROD. No new equations.
+ct_sub: ct_add(A, ct_neg(B)). Negates edge weights.
+ct_mul: creates PROD layers with target = gA[la]*gB[lb]. Repack edges.
+ct_square: creates PROD for upper-triangular pairs. target(la,lb) = gA[la]*gA[lb]*(la≠lb ? 2 : 1)
+ct_mul_const(k): scales all edge weights by k. ct_scale(pk, A, k).
+ct_add_const(k): adds k to c0 only.
+
+Key: fuse (wrapping) uses same mechanism as ct_add for layers.
+Key: ct_square does NOT preserve original edges.
+Key: PROD repack edges encode targets WITHOUT R.
+
+### 117. EQUATION INVENTORY (WHERE DOES R APPEAR?)
+
+| # | Equation | R present? | Solvable? |
+|---|----------|-----------|-----------|
+| 1 | agg_L = Σ sign*w*powg_B[idx] | R*value (embedded in w) | agg computable, R*value known |
+| 2 | v = agg_L0/R₀ + agg_L1/R₁ | R₀⁻¹, R₁⁻¹ | 1 eq, 2 unknowns |
+| 3 | w_i = R * coef_i | R in every weight | coef unknown |
+| 4 | PC = sc(R⁻¹)*G + rho*H | R⁻¹ (as scalar) | rho unknown |
+| 5 | noise_pair: s₁*w₁*g^p₁ + s₂*w₂*g^p₂ = R*δ | R | δ unknown |
+| 6 | R = r₁*r₂*r₃ (from prf_R) | R factored | Each rᵢ from LPN |
+| 7 | PROD target = gA[la]*gA[lb] | R_a*R_b (product) | Public, but can't invert |
+
+**No equation has R isolated with all other terms known.**
+The bounty hint says "extract R from THE equation." Which equation?
+
+### 118. UPDATED STATE (July 24, 2026 21:30 WIB)
+
+**Explored in this sub-session**:
+- ct_square: original edges NOT preserved, PROD repack matches targets ✅
+- R_com: confirmed bug (doesn't hash R), but not serialized → dead end
+- PC: extracted all 44 values, but DLP+rho blocks direct use
+- R derivation: triple LPN product, each 2^341 → infeasible
+- Arithmetic ops: ct_mul creates PROD targets from public aggregates
+
+**Still unexplored**:
+- What if "the equation" is from recrypt (bootstrapping)?
+- What if there's a side-channel in the serialized edge ORDER?
+- Can we use multiple CTs' PCs together (common sk.prf_k)?
+- Is there a mathematical relationship between R and the public aggregate that bypasses LPN?
+
+**Active H# (max 3)**:
+- H#1: Study recrypt.hpp — the FHE bootstrap mechanism
+- H#2: Cross-CT PC analysis (common sk.prf_k → related rhos?)
+- H#3: Edge ordering/permutation leakage
+
