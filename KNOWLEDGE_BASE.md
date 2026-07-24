@@ -2626,15 +2626,69 @@ None of these are attack vectors. They're just validation.
 - Analyzed edge structure (43 edges, noise decomposition)
 - Confirmed all audit functions are validation-only
 
-**Top priority next session:**
-1. DEEP DIVE into rist_H bug exploitation — the `s_result = s` creates
-   a specific algebraic relationship. What IS this relationship mathematically?
-2. Check if `rist_encode(P_buggy) == s` implies something about the curve structure
-3. Try BABY-STEP GIANT-STEP for DLog(H_pvac, G) with larger range (up to 2^40)
-4. Investigate `recrypt_fold.hpp` — the actual FHE bootstrap mechanism
+### 135. BSGS DLOG ON H_PVAC — COMPLETED, NEGATIVE RESULT
+
+Ran BSGS with 2^20 baby steps (covers |k| < 2^40 ≈ 10^12):
+**H_pvac ≠ k*G for |k| < 2^40.**
+DLog(H_pvac, G) is at least 40 bits, likely ~252 bits (random).
+→ Direct DLog on H_pvac is INFEASIBLE. Dead end.
+
+### 136. H ALGEBRA — COMPLETED, NO EXPLOITABLE RELATION
+
+- was_square = 1 for the Elligator2 parameters
+- u ≠ 1 (u is a complex field element)
+- s ≠ |u*s| — the bug IS material, changes the point
+- H_pvac ≠ k*H_correct for |k| ≤ 100000
+- H_pvac ± H_correct ≠ identity
+- H_pvac + H_correct and H_pvac - H_correct are random-looking points
+→ No simple algebraic relation between H_pvac and H_correct. Dead end.
+
+### 137. BOUNTY2 VERIFY_CHAIN — BAD MAGIC ERROR
+
+bounty2_data uses different serialization format than bounty3.
+`pvac_ser::deserialize_pubkey` fails with "bad magic" on bounty2 pk.bin.
+Need format-aware deserialization. NOT a priority right now.
+
+### 138. P-1 FACTORIZATION (PARTIAL)
+
+Known: P-1 = 2 * (2^63-1) * (2^63+1)
+2^63-1 = 7² × 73 × 127 × 337 × 92737 × 649657 × 768614336404564651
+337 IS a factor of P-1 → powg_B subgroup of order 337 is valid.
+Pohlig-Hellman: could extract R mod small primes, BUT requires knowing T (plaintext component). T unknown → dead end.
+
+### 139. ⚠️ ANTI-REPETITION NOTES (MODEL MUST READ)
+
+**DO NOT REPEAT the following — they are CONFIRMED dead ends:**
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 1 | BSGS DLog(H_pvac, G) | Already done: H ≠ k*G for |k|<2^40 |
+| 2 | DLog relation H_pvac ↔ H_correct | Already done: no relation for |k|≤10^5 |
+| 3 | H == identity check | Already done: NO |
+| 4 | H == small*G (1-10000) | Already done: NO |
+| 5 | P-1 factoring / Pohlig-Hellman on R | Already analyzed: needs T, dead end |
+| 6 | R_com exploitation | Not serialized, dead end |
+| 7 | Edge ordering leakage | Fisher-Yates csprng, dead end |
+| 8 | Cross-CT rho cancellation | Different nonces, dead end |
+| 9 | ct_square for new equations | Self-consistent, no new info |
+| 10 | Seed brute-force | OS csprng, not seeded |
+| 11 | LPN brute force | 2^341, infeasible |
+| 12 | sigma (e.s) analysis | Irrelevant for decryption |
+| 13 | T=0 distinguisher | V2 prevents, random T values |
+| 14 | Re-read all source files | Already fully audited |
+| 15 | bounty2 pk.bin with bounty3 deserializer | Bad magic, different format |
+
+**STILL UNEXPLORED (actual new angles):**
+1. recrypt_fold.hpp — FHE bootstrap mechanism (NEVER read)
+2. recrypt_stage_eval.hpp — stage evaluation logic (NEVER read)  
+3. recrypt_hidden_coeff.hpp — hidden coefficient handling (NEVER read)
+4. Whether `sc_from_fp_signed` creates an exploitable structure when combined with the decryption equation
+5. Whether the NOISE STRUCTURE (N2 pairs, N3 triplets) can be identified from public edges
+6. Whether multiple CTs sharing same sk create a lattice attack opportunity
+7. The Toeplitz hash step in prf_R_core — any weakness in the hash-to-127-bit compression?
 
 **Active H# (max 3)**:
-- H#1: Mathematically analyze what `s_result = s` means for the H point's DLog
-- H#2: BSGS DLog attack on H_pvac (up to 2^40, feasible in hours)
-- H#3: recrypt_fold.hpp bootstrap mechanism analysis
+- H#1: Read recrypt_fold.hpp — the actual FHE bootstrap (NEVER explored)
+- H#2: Noise structure identification — can we separate signal from noise edges?
+- H#3: Toeplitz hash weakness in prf_R_core compression step
 
