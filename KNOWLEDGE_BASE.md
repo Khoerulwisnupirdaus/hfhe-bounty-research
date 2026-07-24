@@ -2408,14 +2408,112 @@ The bounty hint says "extract R from THE equation." Which equation?
 - R derivation: triple LPN product, each 2^341 → infeasible
 - Arithmetic ops: ct_mul creates PROD targets from public aggregates
 
-**Still unexplored**:
-- What if "the equation" is from recrypt (bootstrapping)?
-- What if there's a side-channel in the serialized edge ORDER?
-- Can we use multiple CTs' PCs together (common sk.prf_k)?
-- Is there a mathematical relationship between R and the public aggregate that bypasses LPN?
+### 119. EDGE STRUCTURE ANALYSIS (CT[0] VERIFIED)
+
+CT[0] edge breakdown:
+- Layer 0: 22 edges (11+, 11-), ALL unique idx values (no merge collisions)
+- Layer 1: 21 edges (7+, 14-), ALL unique idx values
+- Total: 43 edges
+
+Expected structure per layer: 8 signal + 2*n2 + 3*n3 noise edges.
+- Layer 0: 22 = 8 + 2*n2 + 3*n3 → 14 noise edges → n2=7, n3=0 (fits)
+- Layer 1: 21 = 8 + 2*n2 + 3*n3 → 13 noise edges → n2=5, n3=1 (5*2+1*3=13, fits)
+  OR n2=2, n3=3 (2*2+3*3=13, fits) — multiple possible decompositions
+
+All idx values unique WITHIN each layer → no merge occurred.
+This means: signal/noise edges did NOT collide on same (idx, sign) pairs.
+
+### 120. NOISE BUDGET COMPUTATION
+
+Budget::compute(params, depth):
+```
+cap = noise_entropy_bits + depth_slope_bits * max(0, d)
+n2 = floor(cap * tuple2_fraction / (2 * log2(B)))
+n3 = floor(cap * (1 - tuple2_fraction) / (3 * log2(B)))
+```
+Where B=337, so log2(337)≈8.4.
+Depth d=0 for initial enc (both layers of wrapped cipher use d=0).
+
+### 121. ENCRYPTION INTERNALS FLOW
+
+Per-layer encryption:
+1. Generate R = prf_R(pk, sk, seed) — 3 LPN products
+2. Generate delta values (noise targets) = prf_R_noise(pk, sk, modified_seed)
+3. Build 8 signal edges: coef[0..6] random, coef[7] = (va - Σ) / g^pos[7]
+4. Build n2 N2-pairs: each pair sums to R * delta_t
+5. Build n3 N3-triplets: each triplet sums to R * delta_t
+6. Multiply all coefs by R → edge weights w = R * coef
+7. Merge edges with same (layer_id, idx, sign) → sum weights
+8. Fisher-Yates shuffle (csprng) → random permutation
+
+Key: after merge+permute, can't distinguish signal from noise edges.
+Key: all randomness in bounty CTs uses OS csprng (NOT seeded).
+Key: edge ORDER after permute carries NO information (uniform random).
+
+### 122. FUSE (WRAPPING) MECHANICS
+
+fuse(a, b) simply concatenates:
+- Layers: a.L + b.L (with PROD offset adjustment)
+- Edges: a.E + b.E (with layer_id offset)
+- c0 stays 0 (both sub-ciphers have c0=0)
+- If total edges > edge_budget: re-merge (but no re-permute of full set)
+
+So after fuse: layer 0 edges come FIRST, layer 1 edges come AFTER.
+The edge ordering might leak which layer each edge belongs to!
+BUT: edge.layer_id is already stored explicitly — it's public info.
+
+### 123. RECRYPT.HPP `enc()` vs BOUNTY `enc_text()`
+
+recrypt.hpp enc(): uses seeded RNG from ONE 32-byte seed.
+  mask, left_seed, right_seed all deterministic from this seed.
+  Uses enc_nat_fp_seeded → enc_fp_depth_seeded.
+
+bounty enc_text(): uses csprng (OS random) for mask and all internal randomness.
+  Uses enc_fp_wrapped_depth → combine_ciphers(enc_fp_depth(), enc_fp_depth()).
+  NOT seeded — truly random.
+
+Implication: no seed to brute-force for bounty CTs.
+
+### 124. PEDERSEN H POINT — NOT YET CHECKED
+
+PC = sc(R_inv) * G + rho * H.
+H is derived via hash-to-group (standard Ristretto255 method).
+If H = k*G for known k → DLP trivial. But k = DLog(H, G) is unknown.
+**TODO**: Verify H derivation is standard. If custom/weak hash-to-group, could leak k.
+
+### 125. WEIGHT RATIOS ELIMINATE R
+
+For edges in same layer: w_i / w_j = coef_i / coef_j (R cancels).
+Weight ratios are PUBLIC and reveal coefficient ratios.
+
+For signal edges: 7 coefs random, 1 determined by constraint.
+For noise N2 pairs: coef_a random, coef_b = f(coef_a, delta, positions).
+
+Weight ratios between signal and noise edges mix random values → no obvious pattern.
+BUT: could cross-CT weight ratio analysis reveal anything? (common sk → related R?)
+Answer: NO. Different CTs have different seeds → different R → different coefs. No relation.
+
+### 126. DEAD ENDS CONFIRMED THIS SESSION
+
+| # | Approach | Result |
+|---|----------|--------|
+| 18 | ct_square for new equations | Self-consistent, no new info |
+| 19 | Edge ordering leakage | Fisher-Yates csprng, uniform random |
+| 20 | R_com exploitation | Not serialized, bug exists but dead end |
+| 21 | Seed brute-force on bounty CTs | Uses OS csprng, not seeded |
+
+### 127. UPDATED STATE (July 24, 2026 22:30 WIB)
+
+**Still unexplored (priority order)**:
+1. Pedersen H point derivation — check if hash-to-group is standard/secure
+2. recrypt_fold.hpp — how does bootstrapping work? Any leakage?
+3. recrypt_stage_eval.hpp / recrypt_stage_link.hpp — stage evaluation
+4. The ACTUAL "equation" the bounty hint refers to
+5. Cross-CT analysis using common sk.prf_k structure
+6. compact_layers behavior — does it ever leak info?
 
 **Active H# (max 3)**:
-- H#1: Study recrypt.hpp — the FHE bootstrap mechanism
-- H#2: Cross-CT PC analysis (common sk.prf_k → related rhos?)
-- H#3: Edge ordering/permutation leakage
+- H#1: Pedersen H point — verify hash-to-group is secure (if broken → instant win)
+- H#2: Recrypt bootstrapping mechanism — the FHE core
+- H#3: What is "THE equation" in the bounty hint? Re-read bounty3 context carefully
 
