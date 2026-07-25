@@ -2846,8 +2846,66 @@ nonce = dom_hash ^ seed.nonce.lo
 | 34 | Known-plaintext without R | 2 equations, 3 unknowns per CT (R_0, R_1, m) |
 | 35 | LPN solve → full break | Only gives S, still need prf_k for R2/R3 |
 
+### 155. LPN MAJORITY DECODE ATTEMPT — FAILED (EXPECTED)
+
+Tried simple majority decoding on ct00_l0_s0_pvac_prf_r_1.jsonl (16384 samples).
+- Mean confidence: 0.0063 (expected 0.75) → essentially ZERO signal
+- Error rate of "solution": 0.497 (random)
+- **ROOT CAUSE**: Simple majority does NOT work for standard LPN.
+  Each equation y_i = <a_i, s> ⊕ e_i — the dot product <a_i, s> involves ALL 4096 bits,
+  so the parity contribution from bits OTHER than s_j acts as random noise that drowns
+  the signal from s_j. Majority only works for sparse LPN (few set bits in s).
+- Proper attacks (BKW, ISD) require 2^341 operations for these params.
+
+### 156. DEAD ENDS UPDATE (TOTAL: 38)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 36 | Simple majority decode on LPN samples | Other bits drown signal, need BKW/ISD (2^341) |
+| 37 | H bug → Pedersen binding failure | H is valid Ristretto point, H ≠ kG for |k|<2^40, no structural weakness |
+| 38 | Extract prf_k from 44 PCs | 44 eqs, 45 unknowns, rho=SHA256(prf_k||nonce) is one-way |
+
+### 157. PUBLIC AUDIT FUNCTION — NO LEAK
+
+All 8 audit checks are PUBLIC statistical checks:
+- `is_cipher_compatible_with_pubkey`: format/params match
+- `bundle_is_wrapped`: each CT has 2 BASE layers
+- `base_layers_are_public_nonzero`: aggregates ≠ 0
+- `public_zero_regression`: fresh key enc/dec roundtrip (no bounty data)
+- `mixed_H_parity`: H matrix columns have mixed parity
+- `mixed_sigma_parity`: generated sigmas have mixed parity
+- `small_H_rank_regression`: small H has full rank
+NONE touch sk or leak secret data.
+
+### 158. SMOKE-UI CROSS-REFERENCE (UPDATED July 25)
+
+New items from their repo NOT in our KB:
+1. **Parser differential**: bit 127 of Fp is silently masked by native parser. Non-canonical wire alias. Not a crypto break.
+2. **Cross-generation composition**: 3 historical pegs (08bf879, e4645c9, 88a72b7) analyzed. No cross-key relations found.
+3. **V1 plaintext format was**: `email = bounty.data%06u@octra.org\nsecret = <64 hex>\n` (~121 bytes)
+4. **Möbius/projective map analysis**: No structure found in LPN y-sequence or character evaluations.
+5. **Entropy fault injection**: getrandom(2) pass all tests.
+6. **SMT solver (Z3/CVC5)**: Confirmed at toy primes that independent masks → all candidates satisfiable.
+7. **secret.ct size**: 1,963,107 bytes
+
+KEY SMOKE-UI CONCLUSION MATCHING OURS:
+- "Recovering S would still leave the independent 256-bit prf_k"
+- "even exact plaintext knowledge gives no R oracle"
+- "v2 omits R_com" removing verification oracle
+
+### 159. DEAD ENDS UPDATE (TOTAL: 41)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 36 | Simple majority decode on LPN samples | Other bits drown signal, need BKW/ISD (2^341) |
+| 37 | H bug → Pedersen binding failure | H is valid Ristretto point, H ≠ kG for |k|<2^40 |
+| 38 | Extract prf_k from 44 PCs | 44 eqs, 45 unknowns, rho=SHA256(prf_k||nonce) is one-way |
+| 39 | Public audit function side-channel | All 8 checks are purely public, no sk touched |
+| 40 | Manifest/metadata leak | Only public metadata, no secret material |
+| 41 | Cross-generation composition (smoke-ui confirmed) | Different keys, no state continuity |
+
 **Active H# (max 3)**:
-- H#1: Ristretto255 H bug → does it create a binding failure in Pedersen commitment?
-- H#2: Can we extract prf_k from 44 PC values + known H_buggy?
-- H#3: Is there a mathematical shortcut in the encryption equation itself (dev said "fundamentally broken")?
+- H#1: `sigma_from_H` — sigma is FULLY PUBLIC (all inputs known). Can sigma verification + edge weight correlation leak R?
+- H#2: Edge polynomial evaluation at all 337 g-powers — does the full polynomial reveal structure?
+- H#3: The dev's "fundamentally broken" claim — maybe the break is in a LAYER WE HAVEN'T EXAMINED (e.g., recrypt, homomorphic mul, or the actual FHE evaluation)
 
