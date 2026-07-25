@@ -2717,8 +2717,137 @@ Most unread files are proof/verification infrastructure — unlikely attack surf
 | 27 | recrypt_fold exploitation | Just deduplication, no crypto |
 | 28 | recrypt_hidden_coeff exploitation | Just proof validation |
 
+### 143. NOISE STRUCTURE ANALYSIS (July 25)
+
+Edge distribution per layer (CT[0..4]):
+- CT[0]: L0=22 edges, L1=21 edges
+- CT[1]: L0=24, L1=23
+- CT[2]: L0=27, L1=27
+- CT[3]: L0=28, L1=28
+- CT[4]: L0=28, L1=29
+
+Signal = 8 edges/layer. Noise = total-8 = ~14-21 edges.
+N2 pairs: opposite signs (sa ^ sb = 1). N3 triplets: sum to delta.
+After merge+permute, signal and noise edges are INDISTINGUISHABLE.
+C(22,8) = 319,770 subset choices per layer → brute force ~10^11 for 2 layers. Infeasible.
+
+### 144. TOEPLITZ HASH REVIEW
+
+`toep_127` = GF(2) polynomial multiplication (carry-less multiply).
+LINEAR over GF(2): toep(a ⊕ b) = toep(a) ⊕ toep(b).
+But `hash_to_fp_nonzero` maps 127-bit → Fp (NOT linear).
+And R = product of 3 independent Fp values → destroys linearity.
+→ Toeplitz linearity alone is NOT exploitable. Dead end.
+
+### 145. TEXT ENCODING CONFIRMED
+
+CT[0] = enc_value(msg.size()) → depth=0
+CT[i] = enc_fp_wrapped_depth(chunk_i, depth=i+1) → depth varies
+- 22 CTs = 1 length + 21 data blocks × 15 bytes = max 315 bytes
+- Plaintext = wallet private key + metadata from `priv/plaintext.txt`
+- Pack: pack_15_bytes_to_fp (little-endian 15 bytes → Fp)
+- Unpack: unpack_fp_to_15_bytes
+
+### 146. c0 AND R_com VERIFIED
+
+- c0 = {0,0} for ALL 22 CTs (zeros from synth)
+- R_com = all zeros for ALL 44 layers (V2 removed R_com)
+- Every layer has exactly 1 PC (Pedersen commitment)
+- All layers are BASE (rule=0), no PROD layers
+
+### 147. RHO STRUCTURE CONFIRMED
+
+rho = SHA256("pvac.prf.rho" || prf_k || nonce_lo || nonce_hi || j)
+- prf_k = SHARED across all CTs/layers (256-bit secret)
+- nonce = PUBLIC (in Layer.seed)
+- j = slot index = 0 (single slot)
+→ If we knew prf_k, we'd know all 44 rho values
+→ Then: sc(R_inv)*G = PC - rho*H → DLog in range [0, 2^127)
+→ But 2^63.5 Kangaroo steps still infeasible
+
+### 148. EDGE COUNT LEAK (MINOR)
+
+Edge count varies per CT because depth varies:
+- CT[0] depth=0: 43 edges (least noise)
+- CT[i] depth=i+1: more edges = more noise
+This leaks the CT index but NOT the plaintext. Not useful.
+
+### 149. DEAD ENDS UPDATE (TOTAL: 31)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 29 | Signal/noise separation by brute force | C(22,8)^2 ≈ 10^11 per CT, infeasible |
+| 30 | Toeplitz linearity exploitation | hash_to_fp_nonzero + product kills linearity |
+| 31 | Edge count as plaintext leak | Only leaks depth/CT index, not content |
+
+### 150. UPDATED STATE (July 25, 2026 07:01 WIB)
+
+**Explored and exhausted in this session:**
+- Noise structure identification (signal/noise indistinguishable after merge+permute)
+- Toeplitz hash weakness (linearity killed by hash_to_fp + product)
+- c0 / R_com analysis (all zeros, no info)
+- rho structure (needs prf_k, 256-bit)
+- Edge count analysis (only depth, not content)
+
+**STILL UNEXPLORED:**
+1. ~~recrypt_fold.hpp~~ — just deduplication
+2. ~~recrypt_hidden_coeff.hpp~~ — just proof validation
+3. ~~Toeplitz hash weakness~~ — dead end
+4. ~~Noise structure identification~~ — dead end
+5. Whether R values across layers of SAME CT are related (both from same seed!)
+6. Whether `pedersen_commit` with buggy H creates binding failure when rho varies
+7. The ACTUAL on-chain wallet format — can we derive the pubkey from address?
+8. ~~Whether `compact_edges` merge reveals signal via weight magnitude distribution~~ weights random in both signal/noise
+9. Whether there's a mathematical structure in powg_B × edge_weight products
+
+### 151. WALLET FORMAT DISCOVERY
+
+Plaintext from `priv/plaintext.txt` is likely JSON:
+```json
+{"address":"octC5eR9pLGKbpzTbDgHowkFt8HW7LZYb2gzehzxHamxuAZ","pubkey":"<B64_32B>","privkey":"<B64_64B>"}
+```
+- Address = Base58(SHA256(pubkey)), prepended with "oct"
+- Private key = Base64(Ed25519 64-byte key) = 88 chars
+- CANNOT derive pubkey from address (SHA256 one-way)
+- Estimated plaintext ~218 bytes → 15 blocks + 1 length CT = 16 CTs
+- But we have 22 CTs → either more JSON fields or different format
+- **KNOWN PLAINTEXT BLOCKS**: If JSON, CT[1..4] contain known text (address prefix)
+- **STILL USELESS without R** — can't connect plaintext to ciphertext
+
+### 152. LPN SAMPLE ANALYSIS
+
+44 JSONL files, each with 16384 (a_i, y_i) pairs.
+- Only domain `pvac.prf.r.1` (PRF_R1) provided
+- No PRF_R2, PRF_R3 samples (but same S applies)
+- `public_T_hex` in header matches our computed gA values ✓
+- Even if LPN solved → gives S but NOT prf_k
+- Need BOTH prf_k AND S to compute R
+
+### 153. derive_aes_key STRUCTURE
+
+```
+aes_key = SHA256(prf_k || canon_tag || H_digest || ztag || nonce || dom)
+nonce = dom_hash ^ seed.nonce.lo
+```
+- prf_k generates the LPN matrix rows AND Toeplitz key
+- lpn_s is only used for dot product
+- Solving LPN → S but not prf_k
+- Without prf_k → can't generate matrices for PRF_R2/R3/NOISE/TOEP
+
+### 154. DEAD ENDS UPDATE (TOTAL: 35)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 29 | Signal/noise separation by brute force | C(22,8)^2 ≈ 10^11 per CT, infeasible |
+| 30 | Toeplitz linearity exploitation | hash_to_fp_nonzero + product kills linearity |
+| 31 | Edge count as plaintext leak | Only leaks depth/CT index, not content |
+| 32 | R_0/R_1 from same CT sharing structure | Different nonces → different R values |
+| 33 | Weight magnitude distribution | Both signal and noise weights are random*R |
+| 34 | Known-plaintext without R | 2 equations, 3 unknowns per CT (R_0, R_1, m) |
+| 35 | LPN solve → full break | Only gives S, still need prf_k for R2/R3 |
+
 **Active H# (max 3)**:
-- H#1: Noise structure identification — can we separate signal from noise edges?
-- H#2: Toeplitz hash weakness in prf_R_core compression step
-- H#3: Lattice attack using multiple CTs with same sk
+- H#1: Ristretto255 H bug → does it create a binding failure in Pedersen commitment?
+- H#2: Can we extract prf_k from 44 PC values + known H_buggy?
+- H#3: Is there a mathematical shortcut in the encryption equation itself (dev said "fundamentally broken")?
 
