@@ -3048,6 +3048,31 @@ Decryption is CLIENT-SIDE (0xio Wallet WASM, FHEX).
 | 54 | Octra RPC timing oracle | All 429, no processing |
 | 55 | FHEX/0xio client-side timing | Decrypt is local WASM, not server |
 
+### 173. CAMOFOX BROWSER RECON (0xio docs, OctraScan)
+
+Used camofox (stealth Firefox) at localhost:9377 to bypass Cloudflare/rate limits.
+
+**Browsed pages**:
+- `https://octrascan.io` — block explorer, loaded OK (29K chars)
+- `https://docs.0xio.xyz/developers/oracle-api` — Oracle API is for MARKET DATA (prices, trading, charts). NOT FHE.
+- `https://docs.0xio.xyz/developers/pvac-guide` — PVAC SDK docs
+
+**KEY FINDING**: There are TWO different PVAC systems:
+1. `@0xio/pvac` (production SDK v1.0.2) — **Ristretto255/ElGamal**, Bulletproofs range proofs, Pedersen commitments. Client-side WASM. NOT HFHE!
+2. `pvac_hfhe_cpp` (bounty target) — **LPN/hypergraph-based HFHE**. Completely different crypto.
+
+The production PVAC is exponential-ElGamal, not the LPN-based HFHE. The bounty specifically targets HFHE.
+"PVAC's confidentiality rests on the discrete-log hardness assumption (Ristretto255). It is NOT lattice-based."
+
+**No public decrypt oracle exists.** All FHE operations are client-side WASM.
+
+### 174. DEAD ENDS UPDATE (TOTAL: 57)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 56 | Oracle API as decrypt oracle | It's market data API, not FHE |
+| 57 | @0xio/pvac SDK as timing oracle | Different crypto (ElGamal), client-side only |
+
 **Active H# (max 3)**:
 - H#1: R_com content — what exactly is stored and can it constrain R?
 - H#2: Check if enc_text uses SAME rng seed for m across L0/L1 (would leak m)
