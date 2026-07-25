@@ -2905,7 +2905,114 @@ KEY SMOKE-UI CONCLUSION MATCHING OURS:
 | 41 | Cross-generation composition (smoke-ui confirmed) | Different keys, no state continuity |
 
 **Active H# (max 3)**:
-- H#1: `sigma_from_H` — sigma is FULLY PUBLIC (all inputs known). Can sigma verification + edge weight correlation leak R?
-- H#2: Edge polynomial evaluation at all 337 g-powers — does the full polynomial reveal structure?
-- H#3: The dev's "fundamentally broken" claim — maybe the break is in a LAYER WE HAVEN'T EXAMINED (e.g., recrypt, homomorphic mul, or the actual FHE evaluation)
+### 160. THREE-PRONGED ATTACK RESULTS (July 25, 07:34 WIB)
+
+**Attack 1 — Algebraic Relations**:
+- S0/S1 ratios for all 22 CTs: all random, no pattern, no repeats
+- NTT evaluation at all 337 g-powers for CT[0]: **0 zero evaluations** per layer
+- Cross-CT system: 1 equation, 2 unknowns per CT. Under-determined.
+- R_1 = -R_0*S_1 / (S_0 - R_0*v_0) — parametric, infinite solutions per v_0 candidate.
+
+**Attack 2 — Homomorphic Operations**:
+- ct_add: 4 layers, preserves structure. No anomaly.
+- ct_sub: 4 layers. No anomaly.
+- ct_mul: creates PROD layers. PROD agg ≠ parent product (EXPECTED — PROD has own R_prod).
+- ct_scale(2): aggregates = exactly 2× original ✓ (correct FHE behavior)
+- ct_square: 5 layers, 24 edges. No anomaly.
+- CONCLUSION: FHE operations work correctly on bounty CTs. No exploitable anomaly.
+
+**Attack 3 — Sigma/Salt Recovery**:
+- Salt brute force 0-999: no match (expected, salt is random u64 = 2^64 space)
+- Sigma popcounts all ~4096±150 out of 8192 bits (consistent with XOR of 128 H columns + 128 noise bits)
+- No way to identify signal vs noise edges from sigma structure alone
+
+### 161. DEAD ENDS UPDATE (TOTAL: 47)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 42 | S0/S1 ratio analysis | All ratios random, no pattern |
+| 43 | NTT zero evaluation detection | 0 zeros out of 337 per layer |
+| 44 | Cross-CT algebraic system | Under-determined (1 eq, 2 unknowns per CT) |
+| 45 | ct_mul PROD aggregate anomaly | Expected behavior, PROD has own R_prod |
+| 46 | Salt brute force from sigma | 2^64 space, infeasible |
+| 47 | Sigma popcount distinguisher | All ~4096, consistent with theory |
+
+### 162. WHAT SMOKE-UI HASN'T DONE (OUR ADVANTAGE)
+
+We now have these UNIQUE results not in smoke-ui's report:
+1. ✅ Full WebCLI 40+ endpoint audit
+2. ✅ Wallet JSON format identification
+3. ✅ keygen_from_seed vs keygen analysis
+4. ✅ Homomorphic operation testing on actual bounty CTs
+5. ✅ Salt/sigma brute force attempt
+6. ✅ NTT evaluation at all 337 character points
+7. ✅ S0/S1 ratio cross-CT comparison
+8. ✅ 47 documented dead ends (vs their ~15)
+
+### 163. KNOWN-KEY VALIDATION (SELFTEST)
+
+With known sk, confirmed:
+- `dec_values()` correctly recovers plaintext ✓
+- `S0/R0 + S1/R1 = v` ✓ (formula verified)
+- `S0/S1 = -(R0/R1)*(1+v/m)` ✓ (ratio formula verified)
+- Edge contributions (w/R*g^idx) are ALL large random Fp values — no "simple" edges
+- Layer 0: ~20 unique positions out of 21 edges
+- Layer 1: ~22 unique positions
+- No distinguishable signal vs noise from edge structure
+
+### 164. DELTA CANCELLATION VERIFIED
+
+- delta::Set creates N2+N3 noise terms, each a `prf_R_noise` value
+- `va = v - ds.agg` then signal encodes `R*(v-ds.agg)`, noise encodes `R*delta_i` each
+- Total aggregate: `R*(v-ds.agg + ds.agg) = R*v` — cancellation is EXACT
+- c0 is ALWAYS ZERO for wrapped encryption (both layers are synth'd with c0=0, fuse adds them = 0)
+- Noise budget at depth 0: n2=4, n3=2, vol=6
+
+### 165. Fp ARITHMETIC STRESS TEST — ALL CORRECT
+
+- (P-1)^2 = 1 ✓, (-2)^2 = 4 ✓
+- fp_from_words(P) = 0 ✓ (P normalizes to 0)
+- Associativity, commutativity, distributivity: all pass
+- 10,000 random x*y*inv(y)==x tests: 0 failures
+- NO Fp arithmetic bugs found
+
+### 166. sc_from_fp_signed ANALYSIS
+
+```cpp
+inline Scalar sc_from_fp_signed(const Fp& x) {
+    if (x.hi & (1ULL << 62)) {   // x >= P/2 → "negative"
+        return sc_neg(sc_from_fp(fp_neg(x)));
+    }
+    return sc_from_fp(x);
+}
+```
+This maps Fp → Scalar with signed representation [-P/2, P/2].
+Used in Pedersen commitment: PC = sc_from_fp_signed(R^-1)*G + rho*H.
+Not exploitable: just a bijection between representations.
+Cannot extract DLog of PC without breaking ECDLP.
+
+### 167. DEAD ENDS UPDATE (TOTAL: 51)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 48 | Fp overflow/precision bug | Stress tested: all arithmetic correct |
+| 49 | Delta cancellation imprecision | Exact by construction (same Fp field) |
+| 50 | UBK permutation pattern | Public permutation, cosmetic only |
+| 51 | sc_from_fp_signed → PC info leak | Just a bijection, ECDLP still required |
+
+### 168. rist_H BUG DEEP DIVE (REFRESHED)
+
+Two code anomalies in `rist_H()`:
+1. Line 717: `ns = r;` — harmless (ns was already r after add/sub 1)
+2. **Line 733: `s_result = s;`** — REAL BUG. Overwrites `|u*s|` with raw `s`.
+   - Correct Elligator2: `s_result = |u * inv_sqrt(u*v)|`
+   - Buggy: `s_result = inv_sqrt(u*v)`
+   - Result: H is a valid but DIFFERENT Ristretto point from intended
+   - Impact: Unknown. Would require DLog of buggy H w.r.t. G (2^126 operations)
+   - Previous check: H ≠ kG for |k| < 2^40 (BSGS)
+
+**Active H# (max 3)**:
+- H#1: Can the buggy H point create a special algebraic relationship? (e.g., H = α*G for computable α through the Elligator2 map bug)
+- H#2: `synth()` edge generation — is there a correlation between signal edge positions and noise edge positions that leaks info?
+- H#3: `enc_text` text chunking — does the chunk boundary reveal info about plaintext bytes?
 
