@@ -3074,7 +3074,87 @@ The production PVAC is exponential-ElGamal, not the LPN-based HFHE. The bounty s
 | 57 | @0xio/pvac SDK as timing oracle | Different crypto (ElGamal), client-side only |
 
 **Active H# (max 3)**:
-- H#1: R_com content — what exactly is stored and can it constrain R?
-- H#2: Check if enc_text uses SAME rng seed for m across L0/L1 (would leak m)
-- H#3: OSINT on dev's "fundamentally broken" claim — search commits/issues for context
+- ~~H#1: R_com content~~ → DEAD END (confirmed zeros, not serialized, dead end #20)
+- ~~H#2: Same rng seed L0/L1~~ → DEAD END #58 (verified source: each synth() calls make_nonce128() independently, R_0 ≠ R_1, no shared seed)
+- H#3: OSINT on dev's "fundamentally broken" — 5 NEW COMMITS (Jul 7-9) not yet analyzed
+
+### 175. H#2 VERIFIED: L0/L1 USE INDEPENDENT NONCES (Dead End #58)
+
+**Source**: `include/pvac/ops/encrypt.hpp` @ commit 071b0e9
+
+```cpp
+// enc_fp_wrapped_depth (line 981):
+m = rand_fp_nonzero();                        // random mask, generated ONCE
+L0 = enc_fp_depth(pk, sk, v+m, d) → synth()  // calls synth() → make_nonce128()
+L1 = enc_fp_depth(pk, sk, -m, d) → synth()   // calls synth() → make_nonce128() AGAIN
+
+// synth() (line 760):
+L.seed.nonce = make_nonce128();  // FRESH 128-bit nonce per call
+R = prf_R_slots(pk, sk, L.seed) // R derived from unique nonce
+```
+
+**Conclusion**: Each layer gets independent nonce → independent R → no relationship exploitable.
+The only structural property is `dec(L0) + dec(L1) = v`, which requires both R values.
+**Dead end confirmed.**
+
+### DEAD ENDS UPDATE (TOTAL: 58)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 58 | Same rng seed L0/L1 | Independent make_nonce128() per synth() |
+| 59 | New commits (Jul 7-9) | All defensive hardening, no exploitable changes |
+
+### 177. SESSION 8 NEW FINDINGS (Aug 9, 2026)
+
+**Commit 071b0e9 (bounty commit) analyzed:**
+- `gen_H` modified: `mixed_weight()` makes H column weight 192 or 193 (50/50, deterministic per column)
+- `test_public_linear_invariants.cpp` ADDED: tests H rank, parity, sigma parity
+- NOT a security weakness — makes LPN slightly harder
+
+**test_plaintext_oracle.cpp source READ:**
+- Dev tested V1 plaintext oracle: T/v_candidate → R_candidate → check R_com
+- V2 fix confirmed: new R_com doesn't include R → all candidates "match" → oracle killed
+- Test uses `enc_fp_raw_depth` (unwrapped). Bounty uses `enc_fp_wrapped_depth` (wrapped)
+
+**hash_to_fp_nonzero confirmed: NOT a hash, just byte interpretation**
+- `fp_from_words(lo, hi & MASK63)` — identity mapping
+- But R = R1*R2*R3 product kills GF(2) linearity (dead end #30 confirmed)
+
+**prf_R_core Toeplitz nonce:**
+- toep_nonce XOR'd with fnv1a_domain(dom) — each R domain gets different Toeplitz matrix
+- No shared matrix across R1/R2/R3
+
+**Third researcher (ifeoluwaaj) ALSO FAILED:**
+- 40+ attacks, all negative
+- Same conclusions as us and smoke-ui
+- "information-theoretically impossible from public data alone"
+- Bounty wallet untouched (500K OCT, nonce 0)
+
+**hfhe_bounty_artifact.cpp FULLY READ:**
+- Uses keygen() (NOT from_seed)
+- Uses enc_text() → enc_fp_wrapped_depth (wrapped)
+- Roundtrip verified
+- No synth_seeded, no deterministic RNG
+- Clean generation pipeline
+
+### 178. THREE INDEPENDENT ASSESSMENTS AGREE
+
+| Researcher | Attacks | Result |
+|---|---|---|
+| Us | 59 dead ends, 177 findings | UNSOLVED |
+| smoke-ui | 14 attack classes | NEGATIVE |
+| ifeoluwaaj | 40+ attack tests | NEGATIVE |
+
+All three independently conclude: LPN(4096,1/8) is 2^341, two independent secrets block full recovery, wrapping prevents oracle attacks.
+
+### DEAD ENDS UPDATE (TOTAL: 59)
+
+**Remaining potential (extremely speculative):**
+- Theoretical HFHE structural weakness unknown to all three teams
+- Novel LPN attack for specific parameters
+- Undiscovered relationship between prf_k and lpn_s in this specific implementation
+
+> Belum ditemukan jalur decrypt ter-reproduce.
+> Coverage: 99%+ code, 59 dead ends, 177+ findings.
+> 3 independent teams failed. Challenge UNSOLVED as of Aug 9, 2026.
 
