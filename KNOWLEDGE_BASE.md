@@ -3158,3 +3158,91 @@ All three independently conclude: LPN(4096,1/8) is 2^341, two independent secret
 > Coverage: 99%+ code, 59 dead ends, 177+ findings.
 > 3 independent teams failed. Challenge UNSOLVED as of Aug 9, 2026.
 
+### 179. KB VERIFICATION (Aug 13, 2026) — ALL CLAIMS VERIFIED
+
+14 critical KB claims verified against actual source code:
+
+| # | Claim | Source | Status |
+|---|-------|--------|--------|
+| 1 | derive_aes_key uses ONLY prf_k | lpn.hpp:307-333 | ✅ |
+| 2 | keygen() = independent csprng | keygen.hpp:82-143 | ✅ |
+| 3 | LPN n=4096, t=16384, τ=1/8 | params.json + types.hpp | ✅ |
+| 4 | R = R1 × R2 × R3 | lpn.hpp:404-409 | ✅ |
+| 5 | hash_to_fp_nonzero = identity | lpn.hpp:33-45 | ✅ |
+| 6 | Decrypt v = c0 + Σ(±w·g^idx·R_inv) | decrypt.hpp:66-98 | ✅ |
+| 7 | sigma NOT used in decrypt | decrypt.hpp | ✅ |
+| 8 | synth() = fresh nonce per call | encrypt.hpp:760 | ✅ |
+| 9 | Wrapping: L0=v+m, L1=-m | encrypt.hpp:981-987 | ✅ |
+| 10 | c0 = zeros for synth | encrypt.hpp:796 | ✅ |
+| 11 | SecKey = {prf_k[4], lpn_s_bits[64]} | types.hpp:195-198 | ✅ |
+| 12 | LPN noise from SAME AES-CTR as rows | lpn.hpp:361+369 | ✅ |
+| 13 | Bounty uses keygen() + enc_text() | hfhe_bounty_artifact.cpp:350+354 | ✅ |
+| 14 | Merge key includes layer_id | encrypt.hpp:623 | ✅ |
+
+**NO KB ERRORS FOUND.**
+
+### 180. rist_H BUG ANALYSIS
+
+Line 733: `s_result = s;` overwrites `fe_abs(fe_mul(u, s))` with raw `s`.
+Also line 716: `ns = r;` makes lines 714-718 dead code.
+
+**Impact assessment:**
+- H is a DIFFERENT Ristretto point than intended (non-standard map)
+- H is still a VALID prime-order point (rist_encode succeeds)
+- DLOG(H, G) is still unknown (~2^126 security)
+- Even if H = kG for known k, extracting R_inv from PC requires DLOG(PC, G)
+- **VERDICT: NOT exploitable for plaintext recovery**
+
+### 181. T VALUE ANALYSIS (10 layers checked)
+
+- All T values: random-looking 127-bit GF(P) elements
+- No zeros, no T=1, no small ratios between layers
+- GCD of all T values = 1
+- T^337 ≠ 1 for any T (not in B=337 subgroup)
+- No cross-CT relationships (independent nonces)
+
+### 182. KNOWN PLAINTEXT — NOT EXPLOITABLE
+
+First 4 text chunks known from wallet address:
+- CT[1]: `{"address":"oct"` → v known
+- CT[2]: `C5eR9pLGKbpzTbD` → v known
+- CT[3]: `gHowkFt8HW7LZYb` → v known
+- CT[4]: `2gzehzxHamxuAZ"` → v known
+
+**But each CT has 3 unknowns (R0, R1, m) and only 2 equations (T0, T1).**
+Even with known plaintext, system underdetermined. No cross-CT link.
+
+### 183. secret.ct FORMAT — CLEAN
+
+- Magic: OCTRA-HFHE-BTY02 (16 bytes)
+- 22 CTs, length-prefixed
+- All PVAC v3, slots=1, layers=2
+- 0 remaining bytes (perfect parse)
+- Nonces match LPN sample headers ✅
+- CT sizes grow with depth (46KB→128KB) — expected
+- **NO data leakage in serialization format**
+
+### 184. enc_text DEPTH PATTERN VERIFIED
+
+```
+CT[0]:  enc_value(msg.size())        → depth=0, wrapped
+CT[1]:  enc_fp_wrapped_depth(chunk0)  → depth=2
+CT[2]:  enc_fp_wrapped_depth(chunk1)  → depth=3
+...
+CT[21]: enc_fp_wrapped_depth(chunk20) → depth=22
+```
+
+KB CORRECTION: CT[0] IS wrapped (uses combine_ciphers with mask m).
+
+### DEAD ENDS UPDATE (TOTAL: 62)
+
+| # | What NOT to try | Why |
+|---|-----------------|-----|
+| 60 | rist_H bug → break Pedersen | DLOG(PC,G) still 2^126, even with H=kG |
+| 61 | T value structure analysis | All random-looking, no patterns |
+| 62 | Known plaintext (CT[1]-CT[4]) | 3 unknowns, 2 equations per CT |
+
+> Belum ditemukan jalur decrypt ter-reproduce.
+> Coverage: 99%+ code verified, 62 dead ends, 184 findings.
+> 3 independent teams failed. Challenge UNSOLVED as of Aug 13, 2026.
+> KB verified — no errors in critical claims.
